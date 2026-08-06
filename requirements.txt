@@ -1,6 +1,5 @@
 streamlit
-paddlepaddle==2.6.2
-paddleocr==2.8.1
+rapidocr-onnxruntime
 opencv-python-headless
 openai==1.14.1
 httpx==0.27.2
