@@ -1,5 +1,5 @@
 streamlit
-paddlepaddle
+paddlepaddle==2.6.2
 paddleocr
 opencv-python-headless
 openai==1.14.1
