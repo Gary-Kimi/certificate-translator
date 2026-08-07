@@ -32,6 +32,11 @@ class DocxService:
                     return p
         return None
 
+    def _is_chinese(self, text: str) -> bool:
+        """检查文本是否包含过多的原始中文字符（用于过滤泄露的 OCR 碎片）"""
+        chinese_chars = re.findall(r'[\u4e00-\u9fa5]', text)
+        return len(chinese_chars) > 2
+
     def _add_formatted_runs(self, paragraph, text: str, default_font_size: float = 12.0, default_bold: bool = False):
         if not text:
             return
@@ -88,11 +93,12 @@ class DocxService:
             section.page_width = Inches(8.27)
             section.page_height = Inches(11.69)
 
-        section.top_margin = Inches(0.6)
-        section.bottom_margin = Inches(1.8)
-        section.left_margin = Inches(0.6)
-        section.right_margin = Inches(0.6)
-        section.footer_distance = Inches(0.4)
+        # 💡 精确页面边距，确保单页完整容纳
+        section.top_margin = Inches(0.4)
+        section.bottom_margin = Inches(1.6)
+        section.left_margin = Inches(0.5)
+        section.right_margin = Inches(0.5)
+        section.footer_distance = Inches(0.3)
 
         left_blocks = []
         raw_right_blocks = []
@@ -105,17 +111,19 @@ class DocxService:
             if not en_text:
                 continue
 
+            # 💡 核心过滤：彻底拦截泄露的原始中文碎片！
+            if self._is_chinese(en_text):
+                continue
+
             bbox_rel = block.get("bbox_rel", {})
             rel_left = bbox_rel.get("left", 0.0)
             en_lower = en_text.lower()
 
-            # 仅将绝对属于左半页的固定元数据强归左侧
             is_strictly_left_kw = any(k in en_lower for k in [
                 "student registration number", "graduation certificate number", 
                 "diploma number", "reissued if lost"
             ])
             
-            # 仅将绝对属于右半页的结构化文本强归右侧
             is_strictly_right_kw = any(k in en_lower for k in [
                 "principal", "date of issue", "this is to certify", "having completed", 
                 "granted graduation", "awarded graduation", "student of"
@@ -123,13 +131,12 @@ class DocxService:
 
             normalized_block = {"en_text": en_text, "bbox_rel": bbox_rel}
 
-            # 💡 印章类文本不再强行归左，纯粹依据 rel_left 坐标进行左右分栏！
             if (rel_left >= 0.40 or is_strictly_right_kw) and not is_strictly_left_kw:
                 raw_right_blocks.append(normalized_block)
             else:
                 left_blocks.append(normalized_block)
 
-        # 钢印强力自动保护
+        # 钢印自动保护
         has_embossed_seal = any("embossed seal" in b.get("en_text", "").lower() for b in left_blocks)
         if not has_embossed_seal:
             left_blocks.append({
@@ -139,7 +146,7 @@ class DocxService:
 
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
 
-        # 💡【精准右栏映射】：根据内容特征精准匹配分类
+        # 精准右栏映射
         title_block = None
         main_block = None
         principal_block = None
@@ -154,20 +161,16 @@ class DocxService:
                 principal_block = b
             elif "date of issue" in t_low or "date:" in t_low or (len(txt) < 40 and any(m in t_low for m in ["july", "june", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"])):
                 date_block = b
-            elif any(k in t_low for k in ["this is to certify", "student of", "the student", "having completed", "hereby granted", "hereby awarded", "completed senior", "studied at", "courses with", "satisfactory results"]) or len(txt) > 60:
-                main_block = b
             elif any(k in t_low for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation", "diploma", "certificate title"]):
-                # 排除纯印章说明（印章说明算作 other_right_blocks）
                 if "seal" not in t_low and "stamp" not in t_low:
                     title_block = b
                 else:
                     other_right_blocks.append(b)
+            elif any(k in t_low for k in ["this is to certify", "student of", "the student", "having completed", "hereby granted", "hereby awarded", "completed senior", "studied at", "courses with", "satisfactory results"]) or len(txt) > 50:
+                main_block = b
             else:
                 other_right_blocks.append(b)
 
-        # 💡 删除强行插入 Graduation Diploma 的兜底代码，完全依据识别结果渲染！
-
-        # 组装右侧顺序
         right_blocks_ordered = []
         if title_block:
             right_blocks_ordered.append((title_block, "title"))
@@ -188,7 +191,7 @@ class DocxService:
         col_left = main_table.columns[0]
         col_right = main_table.columns[1]
         col_left.width = Inches(3.8)
-        col_right.width = Inches(6.6)
+        col_right.width = Inches(6.8)
 
         cell_left = main_table.cell(0, 0)
         cell_right = main_table.cell(0, 1)
@@ -197,31 +200,31 @@ class DocxService:
         photo_table = cell_left.add_table(rows=1, cols=1)
         photo_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         photo_cell = photo_table.cell(0, 0)
-        photo_cell.width = Inches(1.3)
+        photo_cell.width = Inches(1.2)
         
         p_photo = photo_cell.paragraphs[0]
         p_photo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p_photo.paragraph_format.space_before = Pt(24)
-        p_photo.paragraph_format.space_after = Pt(12)
+        p_photo.paragraph_format.space_before = Pt(12)
+        p_photo.paragraph_format.space_after = Pt(8)
         
         run_photo = p_photo.add_run("Photo")
         run_photo.font.name = "Times New Roman"
-        run_photo.font.size = Pt(11)
+        run_photo.font.size = Pt(10.5)
 
         for b in left_blocks:
             text = b["en_text"]
             p = cell_left.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.space_before = Pt(6)
-            p.paragraph_format.space_after = Pt(6)
+            p.paragraph_format.space_before = Pt(4)
+            p.paragraph_format.space_after = Pt(4)
 
             t_lower = text.lower()
             is_small = text.startswith("(") or "seal" in t_lower or "not reissued" in t_lower
-            font_sz = 9.5 if is_small else 11.0
+            font_sz = 9.0 if is_small else 10.5
 
             self._add_formatted_runs(p, text, default_font_size=font_sz)
 
-        # ==================== B. 右半区动态渲染 ====================
+        # ==================== B. 右半区紧凑排版 ====================
         p_right_first = cell_right.paragraphs[0]
         first_right = True
 
@@ -237,37 +240,37 @@ class DocxService:
 
             if b_type == "title":
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p.paragraph_format.space_before = Pt(24)
-                p.paragraph_format.space_after = Pt(22)
-                self._add_formatted_runs(p, text, default_font_size=16.0, default_bold=True)
+                p.paragraph_format.space_before = Pt(12)
+                p.paragraph_format.space_after = Pt(16)
+                self._add_formatted_runs(p, text, default_font_size=15.0, default_bold=True)
             elif b_type == "main":
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(10)
-                p.paragraph_format.space_after = Pt(22)
-                p.paragraph_format.line_spacing = 1.35
-                self._add_formatted_runs(p, text, default_font_size=13.5, default_bold=False)
+                p.paragraph_format.space_before = Pt(6)
+                p.paragraph_format.space_after = Pt(16)
+                p.paragraph_format.line_spacing = 1.3
+                self._add_formatted_runs(p, text, default_font_size=12.5, default_bold=False)
             elif b_type == "principal":
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(20)
-                p.paragraph_format.space_after = Pt(15)
-                self._add_formatted_runs(p, text, default_font_size=13.5, default_bold=False)
+                p.paragraph_format.space_before = Pt(12)
+                p.paragraph_format.space_after = Pt(10)
+                self._add_formatted_runs(p, text, default_font_size=12.5, default_bold=False)
             elif b_type == "date":
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                p.paragraph_format.space_before = Pt(15)
-                p.paragraph_format.space_after = Pt(10)
-                self._add_formatted_runs(p, text, default_font_size=13.0, default_bold=False)
+                p.paragraph_format.space_before = Pt(10)
+                p.paragraph_format.space_after = Pt(6)
+                self._add_formatted_runs(p, text, default_font_size=12.0, default_bold=False)
             else:
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER if "seal" in text.lower() else WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(4)
-                p.paragraph_format.space_after = Pt(4)
-                self._add_formatted_runs(p, text, default_font_size=10.0, default_bold=False)
+                p.paragraph_format.space_before = Pt(3)
+                p.paragraph_format.space_after = Pt(3)
+                self._add_formatted_runs(p, text, default_font_size=9.5, default_bold=False)
 
-        # ==================== C. 原生页脚挂载 ====================
+        # ==================== C. 绝对单页固定页脚 ====================
         footer = section.footer
         
         p_line = footer.paragraphs[0]
         p_line.paragraph_format.space_before = Pt(0)
-        p_line.paragraph_format.space_after = Pt(6)
+        p_line.paragraph_format.space_after = Pt(4)
 
         pBdr_xml = (
             f'<w:pBdr {nsdecls("w")}>'
@@ -276,18 +279,18 @@ class DocxService:
         )
         p_line._p.get_or_add_pPr().append(parse_xml(pBdr_xml))
 
-        footer_table = footer.add_table(rows=1, cols=2, width=Inches(10.49))
+        footer_table = footer.add_table(rows=1, cols=2, width=Inches(10.69))
         footer_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         footer_table.autofit = False
 
         cell_decl = footer_table.cell(0, 0)
         cell_seal = footer_table.cell(0, 1)
 
-        cell_decl.width = Inches(7.4)
+        cell_decl.width = Inches(7.6)
         cell_seal.width = Inches(3.0)
 
         p_decl = cell_decl.paragraphs[0]
-        p_decl.paragraph_format.line_spacing = 1.15
+        p_decl.paragraph_format.line_spacing = 1.10
         p_decl.paragraph_format.space_before = Pt(0)
         p_decl.paragraph_format.space_after = Pt(0)
 
@@ -305,7 +308,7 @@ class DocxService:
         for line in footer_text.split('\n'):
             r = p_decl.add_run(line + "\n")
             r.font.name = "Times New Roman"
-            r.font.size = Pt(8.5)
+            r.font.size = Pt(8.0)
             r.font.color.rgb = RGBColor(0, 0, 0)
 
         p_seal = cell_seal.paragraphs[0]
@@ -316,7 +319,7 @@ class DocxService:
         seal_file = self._find_seal_file()
         if seal_file:
             try:
-                p_seal.add_run().add_picture(str(seal_file), width=Inches(1.7))
+                p_seal.add_run().add_picture(str(seal_file), width=Inches(1.6))
             except Exception as e:
                 print(f"Warning: Failed to add seal picture to footer: {e}")
 
