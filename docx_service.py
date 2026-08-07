@@ -49,22 +49,12 @@ class DocxService:
             doc.element.body.append(element)
 
     def _parse_inline_runs_xml(self, line_text: str, font_size_pt: float, base_is_bold: bool = False) -> str:
-        """
-        💡 核心渲染防爆引擎：
-        1. 剥离除了 <b> 和 </b> 以外的所有杂质 HTML 标签；
-        2. 解析 <b>...</b> 行内加粗；
-        3. 对所有文字内容进行 XML 实体安全转义，防止破坏 Word XML 语法结构。
-        """
         if not line_text:
             return ""
 
-        # 1. 基础不安全字符清理
         clean_line = self._clean_text(line_text)
-        
-        # 2. 精准剔除除了 <b> 和 </b> 之外的所有其它 HTML 标签 (如 <p>, </p>, <br>, <i>等)
         clean_line = re.sub(r'<(?!/?b\b)[^>]*>', '', clean_line, flags=re.IGNORECASE)
 
-        # 3. 按 <b>...</b> 切分段落
         parts = re.split(r'(<b>.*?</b>)', clean_line, flags=re.IGNORECASE | re.DOTALL)
         sz_val = int(font_size_pt * 2)
         runs_xml = []
@@ -76,12 +66,10 @@ class DocxService:
             is_bold = base_is_bold
             txt_content = part
 
-            # 判断是否为被 <b>...</b> 包裹的加粗片段
             if part.lower().startswith("<b>") and part.lower().endswith("</b>"):
                 is_bold = True
                 txt_content = part[3:-4]
 
-            # 4. 全局 XML 安全转义 (保证 & < > 绝对不会破坏 Word XML 标签)
             safe_txt = html.escape(txt_content)
             bold_xml = '<w:b/>' if is_bold else ''
 
@@ -140,7 +128,6 @@ class DocxService:
         txbx_content = "".join(p_runs)
         doc_id = self._get_next_id()
 
-        # 补全完整命名空间，确保 VML 解析 100% 合规
         ns_str = nsdecls('w', 'v', 'o', 'r')
         xml = (
             f'<w:p {ns_str}>'
@@ -152,7 +139,7 @@ class DocxService:
             f'<v:textbox inset="0pt,0pt,0pt,0pt">'
             f'<w:txbxContent>{txbx_content}</w:txbxContent>'
             f'</v:textbox>'
-            f'</v:shape>'
+            f'</w:shape>'
             f'</w:pict>'
             f'</w:r>'
             f'</w:p>'
@@ -274,7 +261,7 @@ class DocxService:
             rel_left = bbox_rel.get("left", 0.0)
             en_lower = en_text.lower()
 
-            is_title = any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
+            is_title = any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation"])
             is_right_kw = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation", "date of issue", "june", "july", "student of"])
             is_left_kw = any(k in en_lower for k in ["student registration", "diploma number", "certificate number", "embossed seal", "reissued if lost"])
 
@@ -287,6 +274,17 @@ class DocxService:
                 right_blocks.append(normalized_block)
             else:
                 left_blocks.append(normalized_block)
+
+        # 💡 核心标题兜底机制：若 AI 遗漏了标题，自动在右区首位补全 "Graduation Diploma"
+        has_title = any(
+            any(k in b.get("en_text", "").lower() for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation"])
+            for b in right_blocks
+        )
+        if not has_title:
+            right_blocks.insert(0, {
+                "en_text": "Graduation Diploma",
+                "bbox_rel": {"left": 0.52, "top": 0.08}
+            })
 
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
         right_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
@@ -318,50 +316,65 @@ class DocxService:
             left_y += h_in + 0.12
             count += 1
 
-        # ==================== B. 右半区美化绘制 ====================
-        right_area_x = 4.8
-        right_area_w = 6.2
+        # ==================== B. 右半区动态渲染（精确定位与防重叠） ====================
+        # 💡【精准宽度与起点】：右边缘留足空白，文本框宽度调整为 5.0 英寸（更窄美观）
+        right_area_x = 5.2
+        right_area_w = 5.0
+        right_y = 0.8  # 顶端 Y 轴起始位置
 
         for b in right_blocks:
             text = b["en_text"]
             t_lower = text.lower()
             
-            is_title = any(k in t_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
-            is_main = len(text) > 40 or "student of" in t_lower or "awarded graduation" in t_lower or "granted graduation" in t_lower
+            # 💡 精确分类（优先拆分 Principal，防止误判为 Main）
             is_principal = "principal" in t_lower
-            is_date = "date of issue" in t_lower or any(m in t_lower for m in ["june", "july", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"]) or text.replace('.', '').isdigit()
+            is_title = not is_principal and any(k in t_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation"])
+            is_main = not is_principal and not is_title and (len(text) > 40 or any(k in t_lower for k in ["student of", "having completed", "hereby granted", "hereby awarded", "completed senior"]))
+            is_date = not is_principal and not is_title and not is_main and any(k in t_lower for k in ["date of issue", "july", "june", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"])
 
             if is_title:
                 font_sz = 16.0
                 bold = True
                 h_in = 0.5
-                top_pos = 0.8
+                top_pos = right_y
+                right_y += h_in + 0.30
                 xml = self._create_textbox_vml(text, right_area_x, top_pos, right_area_w, h_in, font_size_pt=font_sz, is_bold=bold, align_center=True)
+            
             elif is_main:
-                font_sz = 14.0
+                font_sz = 13.5
                 bold = False
                 raw_len = len(re.sub(r'<[^>]+>', '', text))
-                lines_cnt = math.ceil(raw_len / 50)
-                h_in = max(2.0, lines_cnt * 0.40)
-                top_pos = 1.6
+                # 针对 5.0 英寸宽度计算自动换行行数
+                lines_cnt = math.ceil(raw_len / 44)
+                h_in = max(1.5, lines_cnt * 0.35)
+                top_pos = max(right_y, 1.5)
+                right_y = top_pos + h_in + 0.35
                 xml = self._create_textbox_vml(text, right_area_x, top_pos, right_area_w, h_in, font_size_pt=font_sz, is_bold=bold)
+            
             elif is_principal:
-                font_sz = 14.0
-                bold = False
-                h_in = 0.4
-                top_pos = 4.0
-                xml = self._create_textbox_vml(text, right_area_x, top_pos, right_area_w, h_in, font_size_pt=font_sz, is_bold=bold)
-            elif is_date:
                 font_sz = 13.5
                 bold = False
                 h_in = 0.4
-                top_pos = 4.7
+                # 💡 彻底防重叠：校长签名永远在正文下方，最小距离为 4.10 英寸
+                top_pos = max(right_y, 4.10)
+                right_y = top_pos + h_in + 0.25
+                xml = self._create_textbox_vml(text, right_area_x, top_pos, right_area_w, h_in, font_size_pt=font_sz, is_bold=bold)
+            
+            elif is_date:
+                font_sz = 13.0
+                bold = False
+                h_in = 0.4
+                # 发证日期在签名下方右对齐，最小距离为 4.75 英寸
+                top_pos = max(right_y, 4.75)
+                right_y = top_pos + h_in + 0.20
                 xml = self._create_textbox_vml(text, right_area_x, top_pos, right_area_w, h_in, font_size_pt=font_sz, is_bold=bold, align_right=True)
+            
             else:
                 font_sz = 10.0 if "seal" in t_lower or text.startswith("(") else 13.0
                 bold = False
                 h_in = 0.35
-                top_pos = 5.1
+                top_pos = right_y
+                right_y += h_in + 0.15
                 xml = self._create_textbox_vml(text, right_area_x, top_pos, right_area_w, h_in, font_size_pt=font_sz, is_bold=bold)
 
             self._append_to_body(doc, xml)
