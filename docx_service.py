@@ -11,7 +11,7 @@ from docx.oxml import parse_xml
 from docx.oxml.ns import nsmap, nsdecls
 import config
 
-# 💡 核心修复：将 VML 和 Office 命名空间动态注册到 python-docx 内部映射表中
+# 注册 VML 和 Office 命名空间
 nsmap['v'] = 'urn:schemas-microsoft-com:vml'
 nsmap['o'] = 'urn:schemas-microsoft-com:office:office'
 
@@ -21,7 +21,6 @@ class DocxService:
         self._id_counter = 1
 
     def _find_seal_file(self) -> Path:
-        """大小写不敏感查找印章图片文件 (适应 Linux 云端环境)"""
         possible_names = ["seal.png", "Seal.png", "SEAL.PNG", "seal.PNG"]
         search_dirs = [Path("."), Path(__file__).resolve().parent]
         for d in search_dirs:
@@ -36,7 +35,6 @@ class DocxService:
         return self._id_counter
 
     def _clean_text(self, text: str) -> str:
-        """过滤 XML 非法控制字符与不可见空白字符"""
         if not text:
             return ""
         cleaned = text.replace('\xa0', ' ').replace('\u200b', '')
@@ -44,7 +42,6 @@ class DocxService:
         return html.escape(cleaned)
 
     def _append_to_body(self, doc: Document, xml_str: str):
-        """将元素安全插入到分节符 (sectPr) 之前，防止被 Word 抛弃"""
         element = parse_xml(xml_str)
         sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
         if sectPr is not None:
@@ -188,13 +185,10 @@ class DocxService:
         footer_top_in = page_h_in - 1.8
         max_content_bottom_in = footer_top_in - 0.25
 
-        left_column_max_x = page_w_in * 0.40
-        right_column_min_x = page_w_in * 0.48
-
         # 1. 绘制 Photo 照片框
         photo_xml = self._create_textbox_vml(
             text="Photo",
-            left_in=2.1,
+            left_in=1.8,
             top_in=0.6,
             width_in=1.3,
             height_in=1.7,
@@ -206,9 +200,6 @@ class DocxService:
 
         # 2. 填充正文文本块
         count = 0
-        min_top_in = 0.5
-        usable_height_in = max_content_bottom_in - min_top_in
-
         for block in blocks:
             en_text = block.get("en_text", "").strip()
             if not en_text:
@@ -217,55 +208,76 @@ class DocxService:
             bbox_rel = block.get("bbox_rel", {})
             rel_left = bbox_rel.get("left", 0.0)
             rel_top = bbox_rel.get("top", 0.0)
-            rel_w = bbox_rel.get("width", 0.1)
-            rel_h = bbox_rel.get("height", 0.03)
 
             char_count = len(en_text)
             en_lower = en_text.lower()
 
             is_title = any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
-            is_right_page_keyword = any(k in en_lower for k in ["principal", "headmaster", "signature", "graduation", "diploma", "having completed", "granted graduation"])
-            is_right_half = (rel_left >= 0.42) or is_right_page_keyword
+            is_right_keyword = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation"])
+            is_right_half = (rel_left >= 0.42) or is_right_keyword
 
             if is_right_half:
-                font_size_pt = 16.0 if is_title else 14.0  # 右半页：Times New Roman 四号 (14pt)
-                is_bold = is_title
-
-                left_in = max(rel_left * page_w_in, right_column_min_x)
-                top_in = min_top_in + (rel_top * usable_height_in * 0.85)
-
-                is_short_label = any(k in en_lower for k in ["principal", "signature", "seal of", "date", "july", "june"])
-                if is_short_label:
-                    needed_w_in = char_count * (font_size_pt * 0.0095) + 0.5
-                    width_in = min(needed_w_in, page_w_in - left_in - 0.2)
-                    width_in = max(3.5, width_in)
+                # ================= 右半页 =================
+                if is_title:
+                    font_size_pt = 16.0
+                    is_bold = True
+                    left_in = max(rel_left * page_w_in, 5.2)
+                    top_in = 0.8
+                    width_in = page_w_in - left_in - 0.5
+                    height_in = 0.5
+                elif "principal" in en_lower:
+                    font_size_pt = 14.0
+                    is_bold = False
+                    left_in = 5.5
+                    top_in = 4.1
+                    width_in = 5.0
+                    height_in = 0.4
+                elif any(m in en_lower for m in ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]) and len(en_text) < 25:
+                    font_size_pt = 14.0
+                    is_bold = False
+                    left_in = 6.8
+                    top_in = 4.8
+                    width_in = 3.5
+                    height_in = 0.4
                 else:
-                    needed_w_in = char_count * (font_size_pt * 0.0075)
-                    max_allowed_w = page_w_in - left_in - 0.3
-                    width_in = min(max(rel_w * page_w_in * 1.2, needed_w_in), max_allowed_w)
-                    width_in = max(1.5, width_in)
+                    # 核心段落：Times New Roman 四号 (14pt)
+                    font_size_pt = 14.0
+                    is_bold = False
+                    left_in = max(rel_left * page_w_in, 5.2)
+                    top_in = 1.5
+                    width_in = page_w_in - left_in - 0.5
+                    
+                    chars_per_line = max(10, int((width_in * 72) / (font_size_pt * 0.55)))
+                    lines_cnt = math.ceil(char_count / chars_per_line)
+                    height_in = max(1.8, lines_cnt * 0.35)
 
             else:
-                font_size_pt = 11.5  # 左半页：Times New Roman 小四 (11.5-12pt)
+                # ================= 左半页 =================
+                is_seal_or_id = en_text.startswith("(") or any(k in en_lower for k in ["seal of", "student id", "certificate no"])
+                
+                if is_seal_or_id:
+                    font_size_pt = 9.5  # 标准公证注释字号
+                else:
+                    font_size_pt = 11.5 # 左侧小四字号
                 is_bold = False
 
-                left_in = rel_left * page_w_in
-                top_in = min_top_in + (rel_top * usable_height_in * 0.85)
+                left_in = 0.35  # 统一左边距
+                
+                # 💡 核心保护：给足 4.2 英寸宽度，保证 (Official Seal of...) 100% 保持在 1 行内！
+                width_in = 4.2
+                height_in = 0.35
 
-                max_allowed_w = max(1.5, left_column_max_x - left_in)
-                needed_w_in = char_count * (font_size_pt * 0.0085) + 0.3
-                width_in = min(needed_w_in, max_allowed_w)
-                width_in = max(1.2, width_in)
-
-            chars_per_line = max(10, int((width_in * 72) / (font_size_pt * 0.55)))
-            estimated_lines = math.ceil(char_count / chars_per_line)
-            single_line_h_in = (font_size_pt / 72.0) * 1.45
-            calculated_h_in = estimated_lines * single_line_h_in
-            
-            height_in = max(rel_h * page_h_in, calculated_h_in)
-            
-            if top_in + height_in > max_content_bottom_in:
-                top_in = max(min_top_in, max_content_bottom_in - height_in)
+                # 垂直方向均匀铺开
+                if "education administrative" in en_lower:
+                    top_in = 2.5
+                elif "student id" in en_lower:
+                    top_in = 3.2
+                elif "certificate no" in en_lower:
+                    top_in = 3.9
+                elif "jingjiang senior high" in en_lower:
+                    top_in = 4.7
+                else:
+                    top_in = 0.8 + (rel_top * 4.5)
 
             xml_str = self._create_textbox_vml(
                 text=en_text,
@@ -283,7 +295,7 @@ class DocxService:
         line_xml = self._create_line_vml(left_in=0.5, top_in=footer_top_in, width_in=page_w_in - 1.0)
         self._append_to_body(doc, line_xml)
 
-        # 4. 绘制落款文本
+        # 4. 绘制落款声明文本
         curr_date = datetime.now().strftime("%b %d, %Y")
         footer_text = (
             f"I confirm the above translation is an accurate translation of the Original document.\n"
