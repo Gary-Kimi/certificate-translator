@@ -109,13 +109,22 @@ class DocxService:
             rel_left = bbox_rel.get("left", 0.0)
             en_lower = en_text.lower()
 
-            is_title = any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation", "certificate title"])
-            is_right_kw = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation", "date of issue", "this is to certify", "student of"])
-            is_left_kw = any(k in en_lower for k in ["student registration", "diploma number", "certificate number", "embossed seal", "reissued if lost", "education authority"])
+            # 仅将绝对属于左半页的固定元数据强归左侧
+            is_strictly_left_kw = any(k in en_lower for k in [
+                "student registration number", "graduation certificate number", 
+                "diploma number", "reissued if lost"
+            ])
+            
+            # 仅将绝对属于右半页的结构化文本强归右侧
+            is_strictly_right_kw = any(k in en_lower for k in [
+                "principal", "date of issue", "this is to certify", "having completed", 
+                "granted graduation", "awarded graduation", "student of"
+            ])
 
             normalized_block = {"en_text": en_text, "bbox_rel": bbox_rel}
 
-            if (rel_left >= 0.40 or is_right_kw or is_title) and not is_left_kw:
+            # 💡 印章类文本不再强行归左，纯粹依据 rel_left 坐标进行左右分栏！
+            if (rel_left >= 0.40 or is_strictly_right_kw) and not is_strictly_left_kw:
                 raw_right_blocks.append(normalized_block)
             else:
                 left_blocks.append(normalized_block)
@@ -130,11 +139,12 @@ class DocxService:
 
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
 
-        # 💡【核心语义分类桶】：打破坐标依赖，强制规定右半页结构顺序
+        # 💡【精准右栏映射】：根据内容特征精准匹配分类
         title_block = None
         main_block = None
         principal_block = None
         date_block = None
+        other_right_blocks = []
 
         for b in raw_right_blocks:
             txt = b["en_text"]
@@ -144,12 +154,20 @@ class DocxService:
                 principal_block = b
             elif "date of issue" in t_low or "date:" in t_low or (len(txt) < 40 and any(m in t_low for m in ["july", "june", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"])):
                 date_block = b
-            elif any(k in t_low for k in ["this is to certify", "student of", "having completed", "hereby granted", "hereby awarded", "completed senior", "studied at"]) or len(txt) > 60:
+            elif any(k in t_low for k in ["this is to certify", "student of", "the student", "having completed", "hereby granted", "hereby awarded", "completed senior", "studied at", "courses with", "satisfactory results"]) or len(txt) > 60:
                 main_block = b
+            elif any(k in t_low for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation", "diploma", "certificate title"]):
+                # 排除纯印章说明（印章说明算作 other_right_blocks）
+                if "seal" not in t_low and "stamp" not in t_low:
+                    title_block = b
+                else:
+                    other_right_blocks.append(b)
             else:
-                title_block = b
+                other_right_blocks.append(b)
 
-        # 组装强规则顺序列表
+        # 💡 删除强行插入 Graduation Diploma 的兜底代码，完全依据识别结果渲染！
+
+        # 组装右侧顺序
         right_blocks_ordered = []
         if title_block:
             right_blocks_ordered.append((title_block, "title"))
@@ -159,8 +177,10 @@ class DocxService:
             right_blocks_ordered.append((principal_block, "principal"))
         if date_block:
             right_blocks_ordered.append((date_block, "date"))
+        for ob in other_right_blocks:
+            right_blocks_ordered.append((ob, "other"))
 
-        # 主结构双栏无框表格
+        # 主结构双栏表格
         main_table = doc.add_table(rows=1, cols=2)
         main_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         main_table.autofit = False
@@ -201,7 +221,7 @@ class DocxService:
 
             self._add_formatted_runs(p, text, default_font_size=font_sz)
 
-        # ==================== B. 右半区按语义顺序强规则渲染 ====================
+        # ==================== B. 右半区动态渲染 ====================
         p_right_first = cell_right.paragraphs[0]
         first_right = True
 
@@ -229,15 +249,20 @@ class DocxService:
             elif b_type == "principal":
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 p.paragraph_format.space_before = Pt(20)
-                p.paragraph_format.space_after = Pt(12)
+                p.paragraph_format.space_after = Pt(15)
                 self._add_formatted_runs(p, text, default_font_size=13.5, default_bold=False)
             elif b_type == "date":
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                p.paragraph_format.space_before = Pt(12)
+                p.paragraph_format.space_before = Pt(15)
                 p.paragraph_format.space_after = Pt(10)
                 self._add_formatted_runs(p, text, default_font_size=13.0, default_bold=False)
+            else:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER if "seal" in text.lower() else WD_ALIGN_PARAGRAPH.LEFT
+                p.paragraph_format.space_before = Pt(4)
+                p.paragraph_format.space_after = Pt(4)
+                self._add_formatted_runs(p, text, default_font_size=10.0, default_bold=False)
 
-        # ==================== C. 原生页脚挂载 (绝对固定底层) ====================
+        # ==================== C. 原生页脚挂载 ====================
         footer = section.footer
         
         p_line = footer.paragraphs[0]
