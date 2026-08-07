@@ -43,7 +43,7 @@ class DocxService:
 
     def _append_to_body(self, doc: Document, xml_str: str):
         element = parse_xml(xml_str)
-        sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
+        sectPr = doc.element.body.find('{[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)}sectPr')
         if sectPr is not None:
             sectPr.addprevious(element)
         else:
@@ -192,7 +192,7 @@ class DocxService:
 
         footer_top_in = page_h_in - 1.8
 
-        # 1. 绘制 Photo 照片框
+        # 1. 照片框
         photo_xml = self._create_textbox_vml(
             text="Photo",
             left_in=1.8,
@@ -205,7 +205,7 @@ class DocxService:
         )
         self._append_to_body(doc, photo_xml)
 
-        # 2. 严格分栏
+        # 2. 分栏归类
         left_blocks = []
         right_blocks = []
 
@@ -219,10 +219,10 @@ class DocxService:
             en_lower = en_text.lower()
 
             is_title = any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
-            is_right_kw = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation"])
-            is_left_kw = any(k in en_lower for k in ["student id", "certificate no", "issuance no", "embossed seal"])
+            is_right_kw = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation", "date of issue", "june", "july"])
+            is_left_kw = any(k in en_lower for k in ["student id", "diploma no", "certificate no", "issuance no", "embossed seal"])
 
-            if (rel_left >= 0.42 or is_right_kw or is_title) and not is_left_kw:
+            if (rel_left >= 0.40 or is_right_kw or is_title) and not is_left_kw:
                 right_blocks.append(block)
             else:
                 left_blocks.append(block)
@@ -232,124 +232,77 @@ class DocxService:
 
         count = 0
 
-        # ==================== A. 左栏防重叠排版引擎 ====================
-        left_y_floor = 2.4
-        left_x_in = 0.35
-        left_w_in = 4.2
+        # ==================== A. 左栏全量绘制 ====================
+        left_y = 2.4
+        for b in left_blocks:
+            text = b["en_text"]
+            t_lower = text.lower()
+            is_small = text.startswith("(") or "seal" in t_lower or "no" in t_lower
+            font_sz = 9.5 if is_small else 11.5
+            lines_cnt = math.ceil(len(text) / 45)
+            h_in = max(0.35, lines_cnt * 0.25)
 
-        for block in left_blocks:
-            en_text = block["en_text"]
-            rel_top = block.get("bbox_rel", {}).get("top", 0.0)
-            en_lower = en_text.lower()
-
-            ideal_top = 2.4 + (rel_top * 3.2)
-            top_in = max(ideal_top, left_y_floor)
-
-            is_seal_or_id = en_text.startswith("(") or any(k in en_lower for k in ["seal", "id", "no."])
-            font_size_pt = 9.5 if is_seal_or_id else 11.5
-
-            lines_cnt = math.ceil(len(en_text) / 45)
-            height_in = max(0.35, lines_cnt * 0.25)
-
-            xml_str = self._create_textbox_vml(
-                text=en_text,
-                left_in=left_x_in,
-                top_in=top_in,
-                width_in=left_w_in,
-                height_in=height_in,
-                font_size_pt=font_size_pt
-            )
-            self._append_to_body(doc, xml_str)
+            xml = self._create_textbox_vml(text, 0.35, left_y, 4.2, h_in, font_size_pt=font_sz)
+            self._append_to_body(doc, xml)
+            left_y += h_in + 0.15
             count += 1
 
-            left_y_floor = top_in + height_in + 0.15
-
-        # ==================== B. 右栏排版引擎 ====================
-        right_title = None
-        right_main = None
-        right_others = []
-
-        for block in right_blocks:
-            en_text = block["en_text"]
-            en_lower = en_text.lower()
-            if any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation"]):
-                right_title = block
-            elif len(en_text) > 40 or "having completed" in en_lower or "awarded graduation" in en_lower:
-                right_main = block
-            else:
-                right_others.append(block)
-
-        # B1. 标题
-        if right_title:
-            xml_str = self._create_textbox_vml(
-                text=right_title["en_text"],
-                left_in=4.8,
-                top_in=0.8,
-                width_in=page_w_in - 4.8 - 0.3,
-                height_in=0.45,
-                font_size_pt=15.0,
-                is_bold=True
-            )
-            self._append_to_body(doc, xml_str)
-            count += 1
-
-        # B2. 主体段落
-        main_bottom_y = 2.0
-        if right_main:
-            en_text = right_main["en_text"]
-            lines_cnt = math.ceil(len(en_text) / 55)
-            height_in = max(1.6, lines_cnt * 0.35)
-
-            xml_str = self._create_textbox_vml(
-                text=en_text,
-                left_in=5.2,
-                top_in=2.0,
-                width_in=page_w_in - 5.2 - 0.5,
-                height_in=height_in,
-                font_size_pt=14.0
-            )
-            self._append_to_body(doc, scheme_xml=None) if False else self._append_to_body(doc, xml_str)
-            count += 1
-            main_bottom_y = 2.0 + height_in + 0.2
-
-        # B3. 右侧尾部元素（印章说明、校长签名、发证日期）
-        right_y_floor = max(3.8, main_bottom_y)
-        right_others.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
-
-        for block in right_others:
-            en_text = block["en_text"]
-            en_lower = en_text.lower()
-
-            align_right = "principal" in en_lower or any(m in en_lower for m in ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"])
+        # ==================== B. 右栏全量绘制（无遗漏） ====================
+        right_y = 0.8
+        for b in right_blocks:
+            text = b["en_text"]
+            t_lower = text.lower()
             
-            top_in = right_y_floor
+            is_title = any(k in t_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
+            is_main = len(text) > 40 or "having completed" in t_lower or "awarded graduation" in t_lower
+            is_principal_or_date = "principal" in t_lower or "date of issue" in t_lower or any(m in t_lower for m in ["june", "july", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"])
 
-            is_seal = "seal" in en_lower or en_text.startswith("(")
-            font_size_pt = 9.5 if is_seal else 14.0
+            align_right = is_principal_or_date and not is_main
 
-            # 💡核心控制：控制右侧印章说明等文本框紧凑对齐，不横向过度拉伸！
-            if align_right:
-                left_in = 5.2
-                width_in = page_w_in - 5.2 - 0.5
+            if is_title:
+                font_sz = 15.0
+                bold = True
+                h_in = 0.45
+                top_pos = 0.8
+                left_pos = 4.8
+                w_pos = page_w_in - 4.8 - 0.3
+            elif is_main:
+                font_sz = 14.0
+                bold = False
+                lines_cnt = math.ceil(len(text) / 55)
+                h_in = max(1.5, lines_cnt * 0.35)
+                top_pos = max(1.8, right_y)
+                left_pos = 5.2
+                w_pos = page_w_in - 5.2 - 0.5
+            elif is_principal_or_date:
+                font_sz = 14.0
+                bold = False
+                h_in = 0.4
+                top_pos = max(4.0, right_y)
+                left_pos = 5.2
+                w_pos = page_w_in - 5.2 - 0.5
             else:
-                left_in = 5.2
-                width_in = 4.2  # 精致紧凑宽度
-            
-            height_in = 0.35
+                # 盖章等标注
+                font_sz = 9.5 if "seal" in t_lower or text.startswith("(") else 14.0
+                bold = False
+                h_in = 0.35
+                top_pos = right_y
+                left_pos = 5.2
+                w_pos = 4.2
 
-            xml_str = self._create_textbox_vml(
-                text=en_text,
-                left_in=left_in,
-                top_in=top_in,
-                width_in=width_in,
-                height_in=height_in,
-                font_size_pt=font_size_pt,
+            xml = self._create_textbox_vml(
+                text=text,
+                left_in=left_pos,
+                top_in=top_pos,
+                width_in=w_pos,
+                height_in=h_in,
+                font_size_pt=font_sz,
+                is_bold=bold,
                 align_right=align_right
             )
-            self._append_to_body(doc, xml_str)
+            self._append_to_body(doc, xml)
+            right_y = top_pos + h_in + 0.15
             count += 1
-
-            right_y_floor = top_in + height_in + 0.15
 
         # 3. 绘制黑分割线
         line_xml = self._create_line_vml(left_in=0.5, top_in=footer_top_in, width_in=page_w_in - 1.0)
