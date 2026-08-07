@@ -275,17 +275,6 @@ class DocxService:
             else:
                 left_blocks.append(normalized_block)
 
-        # 💡 核心标题兜底机制：若 AI 遗漏了标题，自动在右区首位补全 "Graduation Diploma"
-        has_title = any(
-            any(k in b.get("en_text", "").lower() for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation"])
-            for b in right_blocks
-        )
-        if not has_title:
-            right_blocks.insert(0, {
-                "en_text": "Graduation Diploma",
-                "bbox_rel": {"left": 0.52, "top": 0.08}
-            })
-
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
         right_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
 
@@ -316,21 +305,32 @@ class DocxService:
             left_y += h_in + 0.12
             count += 1
 
-        # ==================== B. 右半区动态渲染（精确定位与防重叠） ====================
-        # 💡【精准宽度与起点】：右边缘留足空白，文本框宽度调整为 5.0 英寸（更窄美观）
+        # ==================== B. 右半区动态渲染（防碰撞 + 5.0 英寸精细宽度） ====================
         right_area_x = 5.2
-        right_area_w = 5.0
-        right_y = 0.8  # 顶端 Y 轴起始位置
+        right_area_w = 5.0  # 💡精准宽度：5.0 英寸，右侧留白美观
+        right_y = 0.8       # 顶端 Y 轴起始位置
 
         for b in right_blocks:
             text = b["en_text"]
             t_lower = text.lower()
             
-            # 💡 精确分类（优先拆分 Principal，防止误判为 Main）
-            is_principal = "principal" in t_lower
-            is_title = not is_principal and any(k in t_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation"])
-            is_main = not is_principal and not is_title and (len(text) > 40 or any(k in t_lower for k in ["student of", "having completed", "hereby granted", "hereby awarded", "completed senior"]))
-            is_date = not is_principal and not is_title and not is_main and any(k in t_lower for k in ["date of issue", "july", "june", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"])
+            # 💡【精准分类逻辑】：
+            # 1. 优先判断是否是 Main 长句段落（关键特征词或字数多）
+            is_main_keywords = any(k in t_lower for k in ["student of", "having completed", "hereby granted", "hereby awarded", "completed senior", "born on", "native of", "satisfactory academic", "satisfactory results"])
+            is_main = is_main_keywords or (len(text) > 70 and not "principal" in t_lower)
+            
+            # 2. 判断是否是 Principal 签名
+            is_principal = not is_main and "principal" in t_lower
+            
+            # 3. 判断是否是日期
+            is_date = not is_main and not is_principal and (
+                "date of issue" in t_lower or 
+                "date:" in t_lower or 
+                (len(text) < 40 and any(m in t_lower for m in ["july", "june", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"]))
+            )
+            
+            # 4. 判断是否是标题（从原图翻译而来的标题）
+            is_title = not is_main and not is_principal and not is_date and any(k in t_lower for k in ["graduation", "diploma", "certificate", "jiangsu province"])
 
             if is_title:
                 font_sz = 16.0
@@ -344,7 +344,6 @@ class DocxService:
                 font_sz = 13.5
                 bold = False
                 raw_len = len(re.sub(r'<[^>]+>', '', text))
-                # 针对 5.0 英寸宽度计算自动换行行数
                 lines_cnt = math.ceil(raw_len / 44)
                 h_in = max(1.5, lines_cnt * 0.35)
                 top_pos = max(right_y, 1.5)
@@ -355,7 +354,7 @@ class DocxService:
                 font_sz = 13.5
                 bold = False
                 h_in = 0.4
-                # 💡 彻底防重叠：校长签名永远在正文下方，最小距离为 4.10 英寸
+                # 💡 强力防重叠：校长签名永远在正文下方（最小 Top 4.10 英寸），绝对不会重合
                 top_pos = max(right_y, 4.10)
                 right_y = top_pos + h_in + 0.25
                 xml = self._create_textbox_vml(text, right_area_x, top_pos, right_area_w, h_in, font_size_pt=font_sz, is_bold=bold)
@@ -364,7 +363,6 @@ class DocxService:
                 font_sz = 13.0
                 bold = False
                 h_in = 0.4
-                # 发证日期在签名下方右对齐，最小距离为 4.75 英寸
                 top_pos = max(right_y, 4.75)
                 right_y = top_pos + h_in + 0.20
                 xml = self._create_textbox_vml(text, right_area_x, top_pos, right_area_w, h_in, font_size_pt=font_sz, is_bold=bold, align_right=True)
