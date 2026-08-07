@@ -65,35 +65,39 @@ class TranslationService:
 
         input_json_str = json.dumps(input_blocks, ensure_ascii=False, indent=2)
 
-        prompt_text = f"""你是一名精通中国官方毕业证书公证翻译的视觉大模型专家。
-附件是一张毕业证书原图，下方是从图片中提取的文本块 JSON 数组：
+        prompt_text = f"""你是一名精通中国官方毕业证书/学位证书公证翻译的视觉大模型专家。
+附件是一张毕业证书的原图，下方是从图片中初步提取到的文本块 JSON 数组：
 
 {input_json_str}
 
-【通用实体提取与消歧规则（必须绝对泛化，严禁凭空臆造名字！）】：
+【通用实体提取与真实位置消歧规则】：
 
-一、右半页 4 个核心要素提取（按自然顺序）：
-1. 【证书标题 (Title)】：
-   - 认读顶部实际中文标题据实翻译（如“江苏省高中毕业证书” -> `Senior High School Graduation Certificate of Jiangsu Province`）。
-2. 【正文长句 (Main Body)】：
-   - 包含学生姓名、性别、出生年月/年龄、籍贯、学校名称、修业年限、成绩合格、准予毕业等全部信息。
+1. 【证书标题 (Title)】（必须严格根据原图顶部实际文字据实翻译！）：
+   - 请仔细认读证书顶部（或主体上方）的中文标题文字：
+     * 若原图标题写着“毕业文凭” -> 翻译为 `"Graduation Diploma"`；
+     * 若原图标题写着“毕业证书” -> 翻译为 `"Graduation Certificate"`；
+     * 若原图标题写着“江苏省高中毕业证书” -> 翻译为 `"Senior High School Graduation Certificate of Jiangsu Province"`；
+     * 若原图标题写着“普通高中毕业证书” -> 翻译为 `"General Senior High School Graduation Certificate"`；
+   - 【严禁事项】：绝对不要统一套用某个固定标题！原图实际印什么标题，就据实翻译什么标题！
+
+2. 【印章与公章说明 (Seals)】（据实位置，在哪半边就标注哪半边的坐标）：
+   - 观察印章（如学校行政公章、教育局验印章、钢印等）在原图中的真实物理位置：
+     * 若印章位于图片左半页 -> bbox_rel.left 标注为 0.08 ~ 0.20；
+     * 若印章位于图片右半页（例如盖在右侧正文下方或右下角） -> bbox_rel.left 标注为 0.52 ~ 0.70；
+   - 翻译格式示例：`(Official seal of [学校英文名])`、`(Seal of the education authority for verification)`、`(School embossed seal)`。
+
+3. 【正文长句 (Main Body)】：
+   - 包含学生姓名、性别、出生年月/年龄、籍贯、学校名称、修业年限、成绩合格、准予毕业等全部正文信息。
    - 100% 缝合成一条标准英文公证长句，并用 `<b>...</b>` 标签包裹实体。
-3. 【校长签名 (Principal)】（绝对禁止使用任何默认名！）：
-   - 观察“校长签印”/“校长：”区域的手写字迹或名章。
-   - 若能清楚辨认汉字拼音，翻译为 `Principal: <b>[拼音]</b> (Signature seal)`；
-   - 若字迹潦草模糊无法确认，【绝对禁止捏造或套用 Wu Jun 等名字】，必须降级输出为 `Principal: (Signature seal)`！
-4. 【发证日期 (Date)】：
-   - 据实提取右下角日期，格式为 `Date of Issue: <b>[英文日期]</b>`（如 `Date of Issue: <b>July 1, 2026</b>`）。
 
-二、左半页要素提取：
-- 教育主管验印：`(Seal of the education authority for verification)`
-- 学籍号：`Student Registration Number: <b>[编号]</b>`
-- 毕证字号：`Graduation Certificate Number: <b>[编号]</b>`
-- 学校行政公章：`(Official seal of [学校英文名])`
-- 钢印说明：`(School embossed seal)`
+4. 【校长签名 (Principal)】：
+   - 观察“校长（签印）”/“校长：”区域的手写字迹或名章。据实拼读识别汉字并翻译为拼音，如 `Principal: <b>[签名拼音]</b> (Signature seal)`。若字迹潦草无法确认，降级输出为 `Principal: (Signature seal)`。绝不捏造名字！
+
+5. 【发证日期 (Date)】：
+   - 据实提取日期，格式为 `Date of Issue: <b>[英文日期]</b>`。
 
 【输出要求】：
-直接返回标准的 JSON 数组，严禁使用 Markdown 代码块！
+直接返回标准的 JSON 数组，必须包含识别并翻译的所有文本块，严禁使用 Markdown 代码块！
 """
 
         try:
@@ -110,7 +114,7 @@ class TranslationService:
                 })
 
             messages = [
-                {"role": "system", "content": "你是一个严格遵循泛化提取规则、绝不臆造任何校长人名的公证翻译助手。"},
+                {"role": "system", "content": "你是一个严格据实认读原图标题与真实印章坐标位置的专业公证翻译助手。"},
                 {"role": "user", "content": content_list}
             ]
 
