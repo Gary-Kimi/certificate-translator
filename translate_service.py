@@ -53,25 +53,25 @@ class TranslationService:
 
     def translate_ocr_blocks(self, ocr_data: dict, image_input=None) -> dict:
         blocks = ocr_data.get("blocks", [])
-        if not blocks:
-            return ocr_data
-
+        
         input_blocks = []
         for b in blocks:
-            input_blocks.append({
-                "id": b.get("id"),
-                "text": b.get("text"),
-                "bbox_rel": b.get("bbox_rel")
-            })
+            if isinstance(b, dict):
+                input_blocks.append({
+                    "id": b.get("id"),
+                    "text": b.get("text"),
+                    "bbox_rel": b.get("bbox_rel")
+                })
 
         prompt_text = f"""你是一名精通中国官方毕业证书/学位证书公证翻译的视觉大模型专家。
 附件是一张毕业证书的原图，下方是从该图片中初步提取到的文本块 JSON 数组：
 
 {json.dumps(input_blocks, ensure_ascii=False, indent=2)}
 
-【核心任务：必须完整提取并翻译以下【所有】文本块，绝对不能漏掉正文段落！】：
+【核心任务】：
+请结合原图和文本块，对毕业证书进行完整的英文公证翻译与结构化整合：
 1. 证书标题：翻译为 "Graduation Certificate" 或 "Jiangsu Province High School Graduation Certificate"。
-2. 毕业正文长句（核心！）：将关于学生姓名(如"牛雯")、性别、出生年月、入学毕业时间、修业期满、成绩合格、准予毕业的所有文字，【100% 完整合成为一条连贯的英文公证长句】！
+2. 毕业正文长句（核心！）：将关于学生姓名、性别、出生年月、入学毕业时间、修业期满、成绩合格、准予毕业的所有文字，【100% 完整合成为一条连贯的英文公证长句】！
    示例："Student Niu Wen, female, born on October 12, 2006, aged 18, having completed the three-year senior high school program at this school from September 2022 to June 2025, with satisfactory academic performance, is hereby awarded graduation."
 3. 学校公章：仔细识别红色圆章弧形字迹（如“江浦高级中学文昌校区”），输出 `(Official Seal of Jiangpu Senior High School, Wenchang Campus)`。
 4. 校长签名：仔细识别草书签名字迹（如“薄治中”），输出 `Principal: Bo Zhizhong (Signature)`。
@@ -83,7 +83,8 @@ class TranslationService:
 - 右半页元素（标题、正文段落、学校公章、校长签名、发证日期）：bbox_rel.left 设为 0.52。
 
 【输出要求】：
-必须返回且仅返回包含上述【所有文本块】的 JSON 数组，严禁遗漏正文！格式为标准的 JSON 数组，严禁 Markdown 代码块。
+必须直接返回一个标准的 JSON 数组 `[{"en_text": "...", "bbox_rel": {"left": 0.52, "top": 0.2}}, ...]`。
+严禁使用 Markdown 代码块，保证输出可以直接被 json.loads 解析！
 """
 
         try:
@@ -100,7 +101,7 @@ class TranslationService:
                 })
 
             messages = [
-                {"role": "system", "content": "你是一个严格返回 JSON 格式的专业证书视觉公证翻译与版面重构助手。"},
+                {"role": "system", "content": "你是一个严格返回标准 JSON 数组格式的专业证书视觉公证翻译助手。"},
                 {"role": "user", "content": content_list}
             ]
 
@@ -112,16 +113,35 @@ class TranslationService:
 
             res_content = response.choices[0].message.content.strip()
 
-            if res_content.startswith("```"):
+            # 强力 Markdown 标记清洗
+            if "```" in res_content:
                 lines = res_content.split("\n")
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines and lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                res_content = "\n".join(lines).strip()
+                cleaned = [l for l in lines if not l.strip().startswith("```")]
+                res_content = "\n".join(cleaned).strip()
 
-            merged_translated_blocks = json.loads(res_content)
-            ocr_data["blocks"] = merged_translated_blocks
+            parsed = json.loads(res_content)
+
+            # 💡【核心防错解包】：容错处理，无论返回 list 还是 dict 都能成功解出列表
+            if isinstance(parsed, dict):
+                merged_list = parsed.get("blocks") or parsed.get("data") or parsed.get("translated_blocks") or [parsed]
+            elif isinstance(parsed, list):
+                merged_list = parsed
+            else:
+                merged_list = []
+
+            # 💡【核心字段规范化】：不管模型返回的 Key 叫 en_text, text 还是 translation，统一规整为 en_text
+            final_blocks = []
+            for item in merged_list:
+                if isinstance(item, dict):
+                    txt = item.get("en_text") or item.get("text") or item.get("translation") or item.get("content") or ""
+                    bbox = item.get("bbox_rel") or {"left": 0.52, "top": 0.3}
+                    if txt:
+                        final_blocks.append({
+                            "en_text": txt,
+                            "bbox_rel": bbox
+                        })
+
+            ocr_data["blocks"] = final_blocks
             return ocr_data
 
         except Exception as e:
