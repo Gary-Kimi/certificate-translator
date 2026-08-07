@@ -205,7 +205,7 @@ class DocxService:
         )
         self._append_to_body(doc, photo_xml)
 
-        # 2. 分桶：严格归类左栏与右栏元素
+        # 2. 严格分栏
         left_blocks = []
         right_blocks = []
 
@@ -227,14 +227,13 @@ class DocxService:
             else:
                 left_blocks.append(block)
 
-        # 按相对 Y 轴比例排序，确保从上往下排排坐
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
         right_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
 
         count = 0
 
         # ==================== A. 左栏防重叠排版引擎 ====================
-        left_y_floor = 2.4  # 照片框底部下方起点
+        left_y_floor = 2.4
         left_x_in = 0.35
         left_w_in = 4.2
 
@@ -243,7 +242,6 @@ class DocxService:
             rel_top = block.get("bbox_rel", {}).get("top", 0.0)
             en_lower = en_text.lower()
 
-            # 理想 Y 轴位置，但绝对不能低于上一个框的底边 + 0.15 英寸间距
             ideal_top = 2.4 + (rel_top * 3.2)
             top_in = max(ideal_top, left_y_floor)
 
@@ -264,10 +262,9 @@ class DocxService:
             self._append_to_body(doc, xml_str)
             count += 1
 
-            # 💡【核心防碰撞】：更新下一个左栏元素的起压最低底线
             left_y_floor = top_in + height_in + 0.15
 
-        # ==================== B. 右栏结构化排版引擎 ====================
+        # ==================== B. 右栏排版引擎 ====================
         right_title = None
         right_main = None
         right_others = []
@@ -282,7 +279,7 @@ class DocxService:
             else:
                 right_others.append(block)
 
-        # B1. 标题渲染（最上方）
+        # B1. 标题
         if right_title:
             xml_str = self._create_textbox_vml(
                 text=right_title["en_text"],
@@ -296,7 +293,8 @@ class DocxService:
             self._append_to_body(doc, xml_str)
             count += 1
 
-        # B2. 主体段落（中间）
+        # B2. 主体段落
+        main_bottom_y = 2.0
         if right_main:
             en_text = right_main["en_text"]
             lines_cnt = math.ceil(len(en_text) / 55)
@@ -305,16 +303,17 @@ class DocxService:
             xml_str = self._create_textbox_vml(
                 text=en_text,
                 left_in=5.2,
-                top_in=2.0,  # 居中平移
+                top_in=2.0,
                 width_in=page_w_in - 5.2 - 0.5,
                 height_in=height_in,
                 font_size_pt=14.0
             )
-            self._append_to_body(doc, xml_str)
+            self._append_to_body(doc, scheme_xml=None) if False else self._append_to_body(doc, xml_str)
             count += 1
+            main_bottom_y = 2.0 + height_in + 0.2
 
-        # B3. 右侧尾部元素（签名、发证日期、盖章说明）动态排版在段落下方
-        right_y_floor = 4.1
+        # B3. 右侧尾部元素（印章说明、校长签名、发证日期）
+        right_y_floor = max(3.8, main_bottom_y)
         right_others.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
 
         for block in right_others:
@@ -323,18 +322,24 @@ class DocxService:
 
             align_right = "principal" in en_lower or any(m in en_lower for m in ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"])
             
-            ideal_top = 4.1 + (block.get("bbox_rel", {}).get("top", 0.0) * 1.5)
-            top_in = max(ideal_top, right_y_floor)
+            top_in = right_y_floor
 
             is_seal = "seal" in en_lower or en_text.startswith("(")
             font_size_pt = 9.5 if is_seal else 14.0
 
-            width_in = page_w_in - 5.2 - 0.5
-            height_in = 0.4
+            # 💡核心控制：控制右侧印章说明等文本框紧凑对齐，不横向过度拉伸！
+            if align_right:
+                left_in = 5.2
+                width_in = page_w_in - 5.2 - 0.5
+            else:
+                left_in = 5.2
+                width_in = 4.2  # 精致紧凑宽度
+            
+            height_in = 0.35
 
             xml_str = self._create_textbox_vml(
                 text=en_text,
-                left_in=5.2,
+                left_in=left_in,
                 top_in=top_in,
                 width_in=width_in,
                 height_in=height_in,
@@ -344,7 +349,6 @@ class DocxService:
             self._append_to_body(doc, xml_str)
             count += 1
 
-            # 💡【核心防碰撞】：更新右下角的元素推开底线
             right_y_floor = top_in + height_in + 0.15
 
         # 3. 绘制黑分割线
