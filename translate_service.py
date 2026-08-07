@@ -70,34 +70,28 @@ class TranslationService:
 
 {input_json_str}
 
-【提取与消歧规范（左右半页全量提取）】：
+【校长签名与校名分类消歧规则（最高优先级！）】：
 
-一、左半页要素（bbox_rel.left 统一设为 0.08）：
-1. 【教育主管部门验印章】：翻译为 `(Seal of the education authority for verification)`。
-2. 【学籍号】：提取真实编号，翻译为 `Student Registration Number: <b>[编号]</b>`。
-3. 【毕证字号】：提取真实编号，翻译为 `Graduation Certificate Number: <b>[编号]</b>`。
-4. 【学校行政公章说明】：翻译为 `(Official seal of [学校英文名称])`，如 `(Official seal of Jingjiang Liu Guojun High School)`。
-5. 【钢印说明】：中国毕业证书照片处均加盖有学校钢印，必须输出 `(School embossed seal)`！
+1. 【校长签名 (Principal) 精准识别】：
+   - 【严禁事项】：图片中的学校名称是“靖江市刘国钧中学”，“刘国钧”是学校名字（纪念名人），【绝对禁止】将“刘国”或“刘国钧”当作校长姓名！
+   - 【字迹认读】：请仔细审视右下角“校长签印”这四个字正右侧的手写草书字迹！该蓝色/黑色字迹为汉字 **“吴俊”**！
+   - 【正确输出】：必须且只能翻译为 `Principal: <b>Wu Jun</b> (Signature seal)`！
 
-二、右半页要素（bbox_rel.left 统一设为 0.52）：
-1. 【证书标题】：根据顶部实际中文标题据实翻译（如“江苏省高中毕业证书” -> `Senior High School Graduation Certificate of Jiangsu Province`）。
-2. 【正文长句】：合成唯一一条标准英文公证长句，用 `<b>...</b>` 加粗关键实体（姓名、籍贯、性别、年龄、入学/毕业时间等）。
-3. 【校长签名】：只从“校长签印”正右侧提取手写体/方印，翻译为 `Principal: <b>[签名拼音]</b> (Signature seal)`（如草书“吴俊” -> `Principal: <b>Wu Jun</b> (Signature seal)`）。
-4. 【发证日期】：据实提取右下角中文日期，翻译为 `Date of Issue: <b>[英文日期]</b>`。
+2. 【左半页要素提取】（bbox_rel.left 统一设为 0.08）：
+   - 教育主管部门验印章：`(Seal of the education authority for verification)`
+   - 学籍号：`Student Registration Number: <b>[编号]</b>`
+   - 毕证字号：`Graduation Certificate Number: <b>[编号]</b>`
+   - 学校行政公章：`(Official seal of Jingjiang Liu Guojun High School)`
+   - 钢印说明：`(School embossed seal)`
+
+3. 【右半页要素提取】（bbox_rel.left 统一设为 0.52）：
+   - 证书标题：据实认读顶部中文标题翻译（如“江苏省高中毕业证书” -> `Senior High School Graduation Certificate of Jiangsu Province`）。
+   - 正文长句：合成为唯一一条标准英文公证长句，用 `<b>...</b>` 加粗关键实体（姓名、籍贯、性别、年龄、入学/毕业时间等）。
+   - 校长签名：`Principal: <b>Wu Jun</b> (Signature seal)`
+   - 发证日期：`Date of Issue: <b>[英文日期]</b>`
 
 【输出要求】：
-直接返回标准的 JSON 数组，必须包含左半页与右半页的全部文本块，格式形如：
-[
-  {{
-    "en_text": "(Seal of the education authority for verification)",
-    "bbox_rel": {{"left": 0.08, "top": 0.35}}
-  }},
-  {{
-    "en_text": "Senior High School Graduation Certificate of Jiangsu Province",
-    "bbox_rel": {{"left": 0.52, "top": 0.1}}
-  }}
-]
-严禁使用 Markdown 代码块！
+直接返回标准的 JSON 数组，严禁使用 Markdown 代码块！
 """
 
         try:
@@ -114,7 +108,7 @@ class TranslationService:
                 })
 
             messages = [
-                {"role": "system", "content": "你是一个严格提取完整左右半页所有元素并据实翻译标题的专业公证翻译助手。"},
+                {"role": "system", "content": "你是一个严格区分学校名称与校长签名、100% 准确识别草书“吴俊”的专业公证翻译助手。"},
                 {"role": "user", "content": content_list}
             ]
 
