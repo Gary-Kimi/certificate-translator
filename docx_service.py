@@ -62,7 +62,6 @@ class DocxService:
         align_center: bool = False,
         align_right: bool = False
     ) -> str:
-        """支持左对齐、居中、右对齐的 VML 绝对定位文本框"""
         left_pt = left_in * 72.0
         top_pt = top_in * 72.0
         width_pt = width_in * 72.0
@@ -236,34 +235,34 @@ class DocxService:
                     width_in = page_w_in - left_in - 0.5
                     height_in = 0.5
                 elif "principal" in en_lower:
-                    # 💡【校长签名：强制延伸至右边距，并设为右对齐】
+                    # 校长签名：贴靠右侧
                     font_size_pt = 14.0
                     is_bold = False
                     left_in = 5.2
                     top_in = 4.1
-                    width_in = page_w_in - left_in - 0.5  # 延伸到右侧边缘 (11.19 英寸)
+                    width_in = page_w_in - left_in - 0.5
                     height_in = 0.4
                     align_right = True
                 elif any(m in en_lower for m in ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]) and len(en_text) < 25:
-                    # 💡【发证日期：强制延伸至右边距，并设为右对齐】
+                    # 发证日期：贴靠右侧
                     font_size_pt = 14.0
                     is_bold = False
                     left_in = 5.2
                     top_in = 4.7
-                    width_in = page_w_in - left_in - 0.5  # 延伸到右侧边缘 (11.19 英寸)
+                    width_in = page_w_in - left_in - 0.5
                     height_in = 0.4
                     align_right = True
                 else:
-                    # 核心段落：Times New Roman 四号 (14pt)
+                    # 💡 核心主体段落：起点调整至 top_in = 2.2 英寸，自然向下移至签名上方适宜距离
                     font_size_pt = 14.0
                     is_bold = False
                     left_in = max(rel_left * page_w_in, 5.2)
-                    top_in = 1.5
+                    top_in = 2.2  # 平移下移
                     width_in = page_w_in - left_in - 0.5
                     
                     chars_per_line = max(10, int((width_in * 72) / (font_size_pt * 0.55)))
                     lines_cnt = math.ceil(char_count / chars_per_line)
-                    height_in = max(1.8, lines_cnt * 0.35)
+                    height_in = max(1.6, lines_cnt * 0.35)
 
             else:
                 # ================= 左半页 =================
