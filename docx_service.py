@@ -4,12 +4,17 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
+import docx
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.section import WD_ORIENT
-import config
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls, nsmap
+
+nsmap['v'] = 'urn:schemas-microsoft-com:vml'
+nsmap['o'] = 'urn:schemas-microsoft-com:office:office'
 
 class DocxService:
     def __init__(self):
@@ -26,19 +31,13 @@ class DocxService:
         return None
 
     def _add_formatted_runs(self, paragraph, text: str, default_font_size: float = 12.0, default_bold: bool = False):
-        """
-        💡 原生 Run 解析引擎：解析 <b>...</b> 并使用 python-docx 原生 API 添加 Run，
-        彻底告别手写 XML 拼接与 parse_xml 解析报错！
-        """
         if not text:
             return
 
-        # 基础文本清洗
         clean_text = text.replace('\xa0', ' ').replace('\u200b', '')
         clean_text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', clean_text)
         clean_text = re.sub(r'<(?!/?b\b)[^>]*>', '', clean_text, flags=re.IGNORECASE)
 
-        # 补齐未闭合的 <b> 标签
         b_open_count = len(re.findall(r'<b>', clean_text, flags=re.IGNORECASE))
         b_close_count = len(re.findall(r'</b>', clean_text, flags=re.IGNORECASE))
         if b_open_count > b_close_count:
@@ -57,7 +56,6 @@ class DocxService:
                 is_bold = True
                 txt_content = part[3:-4]
 
-            # 还原 html 实体（如 &amp; -> &）交给 Word 原生处理
             safe_txt = html.unescape(txt_content)
 
             run = paragraph.add_run(safe_txt)
@@ -94,7 +92,6 @@ class DocxService:
         section.left_margin = Inches(0.6)
         section.right_margin = Inches(0.6)
 
-        # 1. 左右文本块归类分栏
         left_blocks = []
         right_blocks = []
 
@@ -121,25 +118,31 @@ class DocxService:
             else:
                 left_blocks.append(normalized_block)
 
+        # 💡【钢印强力自动保护】：确保左半区一定包含 (School embossed seal) 钢印标注
+        has_embossed_seal = any("embossed seal" in b.get("en_text", "").lower() for b in left_blocks)
+        if not has_embossed_seal:
+            left_blocks.append({
+                "en_text": "(School embossed seal)",
+                "bbox_rel": {"left": 0.08, "top": 0.8}
+            })
+
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
         right_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
 
-        # 2. 创建 2 栏无框主结构表格（确保左右绝对平行且纵向不重叠）
+        # 主结构双栏无框表格
         main_table = doc.add_table(rows=1, cols=2)
         main_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         main_table.autofit = False
 
-        # 栏宽设定
         col_left = main_table.columns[0]
         col_right = main_table.columns[1]
         col_left.width = Inches(3.8)
-        col_right.width = Inches(6.4)
+        col_right.width = Inches(6.6)
 
         cell_left = main_table.cell(0, 0)
         cell_right = main_table.cell(0, 1)
 
         # ==================== A. 左半区渲染 ====================
-        # A1. 照片框 (加框 1.3 英寸)
         photo_table = cell_left.add_table(rows=1, cols=1)
         photo_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         photo_cell = photo_table.cell(0, 0)
@@ -147,20 +150,19 @@ class DocxService:
         
         p_photo = photo_cell.paragraphs[0]
         p_photo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p_photo.paragraph_format.space_before = Pt(12)
-        p_photo.paragraph_format.space_after = Pt(12)
+        p_photo.paragraph_format.space_before = Pt(8)
+        p_photo.paragraph_format.space_after = Pt(8)
         
         run_photo = p_photo.add_run("Photo")
         run_photo.font.name = "Times New Roman"
         run_photo.font.size = Pt(11)
 
-        # A2. 左栏文字细节绘制
         for b in left_blocks:
             text = b["en_text"]
             p = cell_left.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.space_before = Pt(6)
-            p.paragraph_format.space_after = Pt(6)
+            p.paragraph_format.space_before = Pt(5)
+            p.paragraph_format.space_after = Pt(5)
 
             t_lower = text.lower()
             is_small = text.startswith("(") or "seal" in t_lower or "not reissued" in t_lower
@@ -168,7 +170,7 @@ class DocxService:
 
             self._add_formatted_runs(p, text, default_font_size=font_sz)
 
-        # ==================== B. 右半区渲染（防碰撞与精细版面） ====================
+        # ==================== B. 右半区渲染 ====================
         p_right_first = cell_right.paragraphs[0]
         first_right = True
 
@@ -193,41 +195,58 @@ class DocxService:
 
             if is_title:
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p.paragraph_format.space_before = Pt(10)
-                p.paragraph_format.space_after = Pt(25)
+                p.paragraph_format.space_before = Pt(8)
+                p.paragraph_format.space_after = Pt(20)
                 self._add_formatted_runs(p, text, default_font_size=16.0, default_bold=True)
             elif is_main:
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(10)
-                p.paragraph_format.space_after = Pt(25)
+                p.paragraph_format.space_before = Pt(8)
+                p.paragraph_format.space_after = Pt(20)
                 p.paragraph_format.line_spacing = 1.3
                 self._add_formatted_runs(p, text, default_font_size=13.5, default_bold=False)
             elif is_principal:
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(20)
-                p.paragraph_format.space_after = Pt(15)
+                p.paragraph_format.space_before = Pt(15)
+                p.paragraph_format.space_after = Pt(12)
                 self._add_formatted_runs(p, text, default_font_size=13.5, default_bold=False)
             elif is_date:
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                p.paragraph_format.space_before = Pt(15)
+                p.paragraph_format.space_before = Pt(12)
                 p.paragraph_format.space_after = Pt(10)
                 self._add_formatted_runs(p, text, default_font_size=13.0, default_bold=False)
             else:
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(5)
-                p.paragraph_format.space_after = Pt(5)
+                p.paragraph_format.space_before = Pt(4)
+                p.paragraph_format.space_after = Pt(4)
                 self._add_formatted_runs(p, text, default_font_size=12.0, default_bold=False)
 
-        # 3. 底部黑色分割线
-        p_div = doc.add_paragraph()
-        p_div.paragraph_format.space_before = Pt(15)
-        p_div.paragraph_format.space_after = Pt(10)
-        run_line = p_div.add_run("_________________________________________________________________________________")
-        run_line.font.name = "Times New Roman"
-        run_line.font.size = Pt(10)
-        run_line.font.bold = True
+        # ==================== 3. 底部 100% 贯穿黑色矢量分割线 ====================
+        p_line = doc.add_paragraph()
+        p_line.paragraph_format.space_before = Pt(15)
+        p_line.paragraph_format.space_after = Pt(8)
 
-        # 4. 落款公证声明文字
+        pBdr_xml = (
+            f'<w:pBdr {nsdecls("w")}>'
+            f'<w:bottom w:val="single" w:sz="12" w:space="4" w:color="000000"/>'
+            f'</w:pBdr>'
+        )
+        p_line._p.get_or_add_pPr().append(parse_xml(pBdr_xml))
+
+        # ==================== 4. 底部声明 + 翻译公司盖章图片双栏表 ====================
+        footer_table = doc.add_table(rows=1, cols=2)
+        footer_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        footer_table.autofit = False
+
+        cell_decl = footer_table.cell(0, 0)
+        cell_seal = footer_table.cell(0, 1)
+
+        cell_decl.width = Inches(7.4)
+        cell_seal.width = Inches(3.0)
+
+        p_decl = cell_decl.paragraphs[0]
+        p_decl.paragraph_format.line_spacing = 1.15
+        p_decl.paragraph_format.space_after = Pt(0)
+
         curr_date = datetime.now().strftime("%b %d, %Y")
         footer_text = (
             f"I confirm the above translation is an accurate translation of the Original document.\n"
@@ -239,26 +258,23 @@ class DocxService:
             f"Date of Translation: {curr_date}"
         )
 
-        p_foot = doc.add_paragraph()
-        p_foot.paragraph_format.line_spacing = 1.15
         for line in footer_text.split('\n'):
-            run_f = p_foot.add_run(line + "\n")
-            run_f.font.name = "Times New Roman"
-            run_f.font.size = Pt(8.5)
-            run_f.font.color.rgb = RGBColor(0, 0, 0)
+            r = p_decl.add_run(line + "\n")
+            r.font.name = "Times New Roman"
+            r.font.size = Pt(8.5)
+            r.font.color.rgb = RGBColor(0, 0, 0)
 
-        # 5. 加载盖章图片
+        p_seal = cell_seal.paragraphs[0]
+        p_seal.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        
         seal_file = self._find_seal_file()
         if seal_file:
             try:
-                p_seal = doc.add_paragraph()
-                p_seal.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                p_seal.paragraph_format.space_before = Pt(-80)  # 上浮贴合
                 p_seal.add_run().add_picture(str(seal_file), width=Inches(1.8))
             except Exception as e:
                 print(f"Warning: Failed to add seal picture: {e}")
 
-        # 6. 保存文档
+        # 5. 保存文档
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"translated_certificate_{timestamp}.docx"
         file_path = self.output_dir / filename
