@@ -8,7 +8,6 @@ from docx import Document
 from docx.shared import Inches
 from docx.enum.section import WD_ORIENT
 from docx.oxml import parse_xml
-from docx.oxml.ns import nsdecls
 import config
 
 class DocxService:
@@ -17,7 +16,7 @@ class DocxService:
         self._id_counter = 1
 
     def _find_seal_file(self) -> Path:
-        """大小写模糊寻找印章图片"""
+        """大小写模糊寻找印章图片 (适应 Linux 环境)"""
         possible_names = ["seal.png", "Seal.png", "SEAL.PNG", "seal.PNG"]
         search_dirs = [Path("."), Path(__file__).resolve().parent]
         for d in search_dirs:
@@ -38,6 +37,7 @@ class DocxService:
         return html.escape(cleaned)
 
     def _append_to_body(self, doc: Document, xml_str: str):
+        """确保元素插入在分节符 (sectPr) 之前，防止被 Word 忽略"""
         element = parse_xml(xml_str)
         sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
         if sectPr is not None:
@@ -57,6 +57,7 @@ class DocxService:
         show_border: bool = False,
         align_center: bool = False
     ) -> str:
+        """标准 VML 文本框（显式声明 xmlns:w 和 xmlns:v，绝对不报错）"""
         left_pt = left_in * 72.0
         top_pt = top_in * 72.0
         width_pt = width_in * 72.0
@@ -87,7 +88,8 @@ class DocxService:
         txbx_content = "".join(p_runs)
         doc_id = self._get_next_id()
 
-        xml = f'''<w:p {nsdecls("w", "v")}>
+        xml = f'''<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                     xmlns:v="urn:schemas-microsoft-com:vml">
           <w:r>
             <w:pict>
               <v:shape id="box_{doc_id}" type="#_x0000_t202"
@@ -105,12 +107,14 @@ class DocxService:
         return xml
 
     def _create_line_vml(self, left_in: float, top_in: float, width_in: float) -> str:
+        """标准 VML 长分割线"""
         left_pt = left_in * 72.0
         top_pt = top_in * 72.0
         right_pt = (left_in + width_in) * 72.0
         doc_id = self._get_next_id()
 
-        xml = f'''<w:p {nsdecls("w", "v")}>
+        xml = f'''<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                     xmlns:v="urn:schemas-microsoft-com:vml">
           <w:r>
             <w:pict>
               <v:line id="line_{doc_id}"
@@ -124,13 +128,17 @@ class DocxService:
         return xml
 
     def _create_floating_image_vml(self, rId: str, left_in: float, top_in: float, width_in: float, height_in: float) -> str:
+        """标准 VML 浮动公章图片"""
         left_pt = left_in * 72.0
         top_pt = top_in * 72.0
         width_pt = width_in * 72.0
         height_pt = height_in * 72.0
         doc_id = self._get_next_id()
 
-        xml = f'''<w:p {nsdecls("w", "v", "o", "r")}>
+        xml = f'''<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                     xmlns:v="urn:schemas-microsoft-com:vml"
+                     xmlns:o="urn:schemas-microsoft-com:office:office"
+                     xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
           <w:r>
             <w:pict>
               <v:shape id="seal_{doc_id}" type="#_x0000_t75"
@@ -175,7 +183,7 @@ class DocxService:
         footer_top_in = page_h_in - 1.8
         max_content_bottom_in = footer_top_in - 0.25
 
-        # 1. 绘制 Photo 照片框
+        # 1. 绘制 Photo 照片框（位于左侧文字正上方，X=2.1, Y=0.6）
         photo_xml = self._create_textbox_vml(
             text="Photo",
             left_in=2.1,
@@ -188,7 +196,7 @@ class DocxService:
         )
         self._append_to_body(doc, photo_xml)
 
-        # 2. 填充正文（自动分配字号：左半页小四 12pt / 右半页四号 14pt）
+        # 2. 填充正文（左半页：Times New Roman 小四 12pt / 右半页：Times New Roman 四号 14pt）
         count = 0
         min_top_in = 0.5
         usable_height_in = max_content_bottom_in - min_top_in
@@ -305,7 +313,5 @@ class DocxService:
             "download_url": f"/api/download/{filename}",
             "block_count": count
         }
-
-docx_service = DocxService()
 
 docx_service = DocxService()
