@@ -16,10 +16,9 @@ class DocxService:
         self._id_counter = 1
 
     def _find_seal_file(self) -> Path:
-        """兼容 Linux 系统大小写敏感的文件查找 (seal.png, Seal.png, SEAL.PNG)"""
-        possible_names = ["seal.png", "Seal.png", "SEAL.PNG", "seal.PNG", "seal.jpeg", "seal.jpg"]
+        """大小写模糊寻找印章图片"""
+        possible_names = ["seal.png", "Seal.png", "SEAL.PNG", "seal.PNG"]
         search_dirs = [Path("."), Path(__file__).resolve().parent]
-        
         for d in search_dirs:
             for name in possible_names:
                 p = d / name
@@ -39,7 +38,7 @@ class DocxService:
 
     def _append_to_body(self, doc: Document, xml_str: str):
         element = parse_xml(xml_str)
-        sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
+        sectPr = doc.element.body.find('{[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)}sectPr')
         if sectPr is not None:
             sectPr.addprevious(element)
         else:
@@ -52,12 +51,11 @@ class DocxService:
         top_in: float, 
         width_in: float, 
         height_in: float, 
-        font_size_pt: float = 11.0,
+        font_size_pt: float = 12.0,
         is_bold: bool = False,
         show_border: bool = False,
         align_center: bool = False
     ) -> str:
-        """使用标准 VML 绘制 Word 绝对定位文本框"""
         left_pt = left_in * 72.0
         top_pt = top_in * 72.0
         width_pt = width_in * 72.0
@@ -89,7 +87,7 @@ class DocxService:
         doc_id = self._get_next_id()
 
         xml = f'''
-        <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        <w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
              xmlns:v="urn:schemas-microsoft-com:vml">
           <w:r>
             <w:pict>
@@ -115,7 +113,7 @@ class DocxService:
         doc_id = self._get_next_id()
 
         xml = f'''
-        <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        <w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
              xmlns:v="urn:schemas-microsoft-com:vml">
           <w:r>
             <w:pict>
@@ -138,10 +136,10 @@ class DocxService:
         doc_id = self._get_next_id()
 
         xml = f'''
-        <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        <w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
              xmlns:v="urn:schemas-microsoft-com:vml"
              xmlns:o="urn:schemas-microsoft-com:office:office"
-             xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+             xmlns:r="[http://schemas.openxmlformats.org/officeDocument/2006/relationships](http://schemas.openxmlformats.org/officeDocument/2006/relationships)">
           <w:r>
             <w:pict>
               <v:shape id="seal_{doc_id}" type="#_x0000_t75"
@@ -184,11 +182,10 @@ class DocxService:
         section.left_margin = Inches(0)
         section.right_margin = Inches(0)
 
-        # 固定底部的横线位置
-        footer_top_in = page_h_in - 1.8  # 距页面底部 1.8 英寸
-        max_content_bottom_in = footer_top_in - 0.25  # 正文最大活动区域底线
+        footer_top_in = page_h_in - 1.8
+        max_content_bottom_in = footer_top_in - 0.25
 
-        # 1. 绘制 [Photo] 照片占位框（精准匹配图二：位于左侧文字正上方，X=2.1, Y=0.6）
+        # 1. 绘制 Photo 照片框
         photo_xml = self._create_textbox_vml(
             text="Photo",
             left_in=2.1,
@@ -201,7 +198,7 @@ class DocxService:
         )
         self._append_to_body(doc, photo_xml)
 
-        # 2. 填充正文文本块 (核心逻辑：严格映射 Y 轴范围在 [0.5, max_content_bottom_in])
+        # 2. 填充正文（区分左右半页控制字号）
         count = 0
         min_top_in = 0.5
         usable_height_in = max_content_bottom_in - min_top_in
@@ -218,29 +215,26 @@ class DocxService:
             rel_h = bbox_rel.get("height", 0.03)
 
             left_in = rel_left * page_w_in
-            
-            # Y 轴映射：将 [0.0, 1.0] 的相对坐标按比例压进横线上方的安全区
             top_in = min_top_in + (rel_top * usable_height_in * 0.85)
 
             char_count = len(en_text)
 
-            # --- 匹配图二的字号与格式策略 ---
+            # --- 核心字号分配策略 ---
             is_title = any(k in en_text.lower() for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
+            is_right_half = rel_left >= 0.45  # 判断是否位于右半边
+
             if is_title:
-                font_size_pt = 15.0
+                font_size_pt = 16.0  # 标题：16pt
                 is_bold = True
-            elif char_count > 60:  # 大段核心文本
-                font_size_pt = 11.5
-                is_bold = False
-            elif char_count > 30:
-                font_size_pt = 10.5
+            elif is_right_half:
+                font_size_pt = 14.0  # 右半页：四号 (14pt)
                 is_bold = False
             else:
-                font_size_pt = 10.0
+                font_size_pt = 12.0  # 左半页：小四 (12pt)
                 is_bold = False
 
             # 计算宽度
-            needed_w_in = char_count * (font_size_pt * 0.007)
+            needed_w_in = char_count * (font_size_pt * 0.0068)
             width_in = max(rel_w * page_w_in * 1.3, needed_w_in)
             
             max_allowed_w = page_w_in - left_in - 0.2
@@ -248,7 +242,7 @@ class DocxService:
                 width_in = min(width_in, max_allowed_w)
             width_in = max(1.0, width_in)
 
-            # 计算高度并限制绝不超过横线
+            # 计算高度
             chars_per_line = max(10, int((width_in * 72) / (font_size_pt * 0.55)))
             estimated_lines = math.ceil(char_count / chars_per_line)
             single_line_h_in = (font_size_pt / 72.0) * 1.4
@@ -256,7 +250,6 @@ class DocxService:
             
             height_in = max(rel_h * page_h_in, calculated_h_in)
             
-            # 终极保护：如果文本框底部越界，强行向上压回横线上方
             if top_in + height_in > max_content_bottom_in:
                 top_in = max(min_top_in, max_content_bottom_in - height_in)
 
@@ -272,11 +265,11 @@ class DocxService:
             self._append_to_body(doc, xml_str)
             count += 1
 
-        # 3. 绘制底部长分割线
+        # 3. 绘制黑分割线
         line_xml = self._create_line_vml(left_in=0.5, top_in=footer_top_in, width_in=page_w_in - 1.0)
         self._append_to_body(doc, line_xml)
 
-        # 4. 绘制公证落款声明文字
+        # 4. 绘制落款文本
         curr_date = datetime.now().strftime("%b %d, %Y")
         footer_text = (
             f"I confirm the above translation is an accurate translation of the Original document.\n"
@@ -298,7 +291,7 @@ class DocxService:
         )
         self._append_to_body(doc, footer_text_xml)
 
-        # 5. 加载公章图片 (添加大小写模糊匹配，确保在 Linux 云端 100% 找到图片)
+        # 5. 加载盖章图片
         seal_file = self._find_seal_file()
         if seal_file:
             try:
@@ -313,8 +306,6 @@ class DocxService:
                 self._append_to_body(doc, seal_xml)
             except Exception as e:
                 print(f"Warning: Failed to render seal image: {e}")
-        else:
-            print("Warning: seal.png image file not found in repository.")
 
         # 6. 保存文档
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
