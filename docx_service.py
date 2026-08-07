@@ -88,11 +88,12 @@ class DocxService:
             section.page_width = Inches(8.27)
             section.page_height = Inches(11.69)
 
-        # 页边距设置
-        section.top_margin = Inches(0.5)
-        section.bottom_margin = Inches(0.4)
+        # 💡 精确边距：留出底部 1.8 英寸空间给原生页脚，防止正文与页脚重叠
+        section.top_margin = Inches(0.6)
+        section.bottom_margin = Inches(1.8)
         section.left_margin = Inches(0.6)
         section.right_margin = Inches(0.6)
+        section.footer_distance = Inches(0.4)
 
         left_blocks = []
         right_blocks = []
@@ -144,7 +145,7 @@ class DocxService:
         cell_left = main_table.cell(0, 0)
         cell_right = main_table.cell(0, 1)
 
-        # ==================== A. 左半区渲染 ====================
+        # ==================== A. 左半区渲染 (主体舒适下移) ====================
         photo_table = cell_left.add_table(rows=1, cols=1)
         photo_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         photo_cell = photo_table.cell(0, 0)
@@ -152,7 +153,7 @@ class DocxService:
         
         p_photo = photo_cell.paragraphs[0]
         p_photo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p_photo.paragraph_format.space_before = Pt(20)
+        p_photo.paragraph_format.space_before = Pt(24)  # 顶部增加留白，照片优雅下移
         p_photo.paragraph_format.space_after = Pt(12)
         
         run_photo = p_photo.add_run("Photo")
@@ -172,7 +173,7 @@ class DocxService:
 
             self._add_formatted_runs(p, text, default_font_size=font_sz)
 
-        # ==================== B. 右半区渲染 ====================
+        # ==================== B. 右半区渲染 (主体舒适下移) ====================
         p_right_first = cell_right.paragraphs[0]
         first_right = True
 
@@ -197,13 +198,13 @@ class DocxService:
 
             if is_title:
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p.paragraph_format.space_before = Pt(20)
-                p.paragraph_format.space_after = Pt(20)
+                p.paragraph_format.space_before = Pt(24)  # 标题同步下移
+                p.paragraph_format.space_after = Pt(22)
                 self._add_formatted_runs(p, text, default_font_size=16.0, default_bold=True)
             elif is_main:
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 p.paragraph_format.space_before = Pt(10)
-                p.paragraph_format.space_after = Pt(20)
+                p.paragraph_format.space_after = Pt(22)
                 p.paragraph_format.line_spacing = 1.35
                 self._add_formatted_runs(p, text, default_font_size=13.5, default_bold=False)
             elif is_principal:
@@ -222,20 +223,23 @@ class DocxService:
                 p.paragraph_format.space_after = Pt(5)
                 self._add_formatted_runs(p, text, default_font_size=12.0, default_bold=False)
 
-        # ==================== C. 100% 极清黑底分界线 (属于正文，不发灰) ====================
-        p_line = doc.add_paragraph()
-        p_line.paragraph_format.space_before = Pt(35)  # 上留白，推送至页底
-        p_line.paragraph_format.space_after = Pt(8)
+        # ==================== C. 原生页脚挂载 (绝对固定底层) ====================
+        footer = section.footer
+        
+        # 1. 顶部贯穿分割黑线条（挂载于页脚首段顶边框，100% 贯穿）
+        p_line = footer.paragraphs[0]
+        p_line.paragraph_format.space_before = Pt(0)
+        p_line.paragraph_format.space_after = Pt(6)
 
         pBdr_xml = (
             f'<w:pBdr {nsdecls("w")}>'
-            f'<w:bottom w:val="single" w:sz="12" w:space="4" w:color="000000"/>'
+            f'<w:top w:val="single" w:sz="12" w:space="4" w:color="000000"/>'
             f'</w:pBdr>'
         )
         p_line._p.get_or_add_pPr().append(parse_xml(pBdr_xml))
 
-        # ==================== D. 100% 极清底表 (属于正文，公章及文字清晰纯黑) ====================
-        footer_table = doc.add_table(rows=1, cols=2)
+        # 2. 底部声明 + 印章双栏表（完全置于页脚内部，绝对不位移）
+        footer_table = footer.add_table(rows=1, cols=2, width=Inches(10.49))
         footer_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         footer_table.autofit = False
 
@@ -277,7 +281,7 @@ class DocxService:
             try:
                 p_seal.add_run().add_picture(str(seal_file), width=Inches(1.7))
             except Exception as e:
-                print(f"Warning: Failed to add seal picture: {e}")
+                print(f"Warning: Failed to add seal picture to footer: {e}")
 
         # 5. 保存文档
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -291,4 +295,5 @@ class DocxService:
             "block_count": len(left_blocks) + len(right_blocks)
         }
 
+docx_service = DocxService()
 docx_service = DocxService()
