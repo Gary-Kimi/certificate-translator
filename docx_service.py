@@ -29,21 +29,20 @@ class DocxService:
             self.seal_path = Path(__file__).resolve().parent / "seal.png"
         self._id_counter = 1
 
-    def _get_next_id((self) -> int:
+    def _get_next_id(self) -> int:
         """生成全局严格递增且唯一的正整数 ID"""
         self._id_counter += 1
         return self._id_counter
 
     def _clean_text(self, text: str) -> str:
-        """核心修复 1：过滤掉会导致 Word XML 损坏的 ASCII 控制字符"""
+        """过滤掉会导致 Word XML 损坏的 ASCII 控制字符"""
         if not text:
             return ""
-        # 剔除 XML 1.0 非法控制字符 (\x00-\x08, \x0B-\x0C, \x0E-\x1F)
         cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
         return html.escape(cleaned)
 
     def _append_to_body(self, doc: Document, xml_str: str):
-        """核心修复 2：确保元素插入在分节符 (sectPr) 之前"""
+        """确保元素插入在分节符 (sectPr) 之前"""
         element = parse_xml(xml_str)
         sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
         if sectPr is not None:
@@ -189,7 +188,7 @@ class DocxService:
         return xml
 
     def generate_docx(self, translated_data: dict) -> dict:
-        self._id_counter = 1  # 重置 ID 计数器
+        self._id_counter = 1
         
         image_size = translated_data.get("image_size", {})
         blocks = translated_data.get("blocks", [])
