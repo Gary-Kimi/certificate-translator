@@ -88,7 +88,6 @@ class DocxService:
             section.page_width = Inches(8.27)
             section.page_height = Inches(11.69)
 
-        # 💡 精确边距：留出底部 1.8 英寸空间给原生页脚，防止正文与页脚重叠
         section.top_margin = Inches(0.6)
         section.bottom_margin = Inches(1.8)
         section.left_margin = Inches(0.6)
@@ -96,7 +95,7 @@ class DocxService:
         section.footer_distance = Inches(0.4)
 
         left_blocks = []
-        right_blocks = []
+        raw_right_blocks = []
 
         for block in blocks:
             if not isinstance(block, dict):
@@ -110,14 +109,14 @@ class DocxService:
             rel_left = bbox_rel.get("left", 0.0)
             en_lower = en_text.lower()
 
-            is_title = any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation"])
-            is_right_kw = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation", "date of issue", "june", "july", "student of"])
-            is_left_kw = any(k in en_lower for k in ["student registration", "diploma number", "certificate number", "embossed seal", "reissued if lost"])
+            is_title = any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation", "certificate title"])
+            is_right_kw = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation", "date of issue", "this is to certify", "student of"])
+            is_left_kw = any(k in en_lower for k in ["student registration", "diploma number", "certificate number", "embossed seal", "reissued if lost", "education authority"])
 
             normalized_block = {"en_text": en_text, "bbox_rel": bbox_rel}
 
             if (rel_left >= 0.40 or is_right_kw or is_title) and not is_left_kw:
-                right_blocks.append(normalized_block)
+                raw_right_blocks.append(normalized_block)
             else:
                 left_blocks.append(normalized_block)
 
@@ -130,7 +129,36 @@ class DocxService:
             })
 
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
-        right_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
+
+        # 💡【核心语义分类桶】：打破坐标依赖，强制规定右半页结构顺序
+        title_block = None
+        main_block = None
+        principal_block = None
+        date_block = None
+
+        for b in raw_right_blocks:
+            txt = b["en_text"]
+            t_low = txt.lower()
+
+            if "principal" in t_low:
+                principal_block = b
+            elif "date of issue" in t_low or "date:" in t_low or (len(txt) < 40 and any(m in t_low for m in ["july", "june", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"])):
+                date_block = b
+            elif any(k in t_low for k in ["this is to certify", "student of", "having completed", "hereby granted", "hereby awarded", "completed senior", "studied at"]) or len(txt) > 60:
+                main_block = b
+            else:
+                title_block = b
+
+        # 组装强规则顺序列表
+        right_blocks_ordered = []
+        if title_block:
+            right_blocks_ordered.append((title_block, "title"))
+        if main_block:
+            right_blocks_ordered.append((main_block, "main"))
+        if principal_block:
+            right_blocks_ordered.append((principal_block, "principal"))
+        if date_block:
+            right_blocks_ordered.append((date_block, "date"))
 
         # 主结构双栏无框表格
         main_table = doc.add_table(rows=1, cols=2)
@@ -145,7 +173,7 @@ class DocxService:
         cell_left = main_table.cell(0, 0)
         cell_right = main_table.cell(0, 1)
 
-        # ==================== A. 左半区渲染 (主体舒适下移) ====================
+        # ==================== A. 左半区渲染 ====================
         photo_table = cell_left.add_table(rows=1, cols=1)
         photo_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         photo_cell = photo_table.cell(0, 0)
@@ -153,7 +181,7 @@ class DocxService:
         
         p_photo = photo_cell.paragraphs[0]
         p_photo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p_photo.paragraph_format.space_before = Pt(24)  # 顶部增加留白，照片优雅下移
+        p_photo.paragraph_format.space_before = Pt(24)
         p_photo.paragraph_format.space_after = Pt(12)
         
         run_photo = p_photo.add_run("Photo")
@@ -173,22 +201,13 @@ class DocxService:
 
             self._add_formatted_runs(p, text, default_font_size=font_sz)
 
-        # ==================== B. 右半区渲染 (主体舒适下移) ====================
+        # ==================== B. 右半区按语义顺序强规则渲染 ====================
         p_right_first = cell_right.paragraphs[0]
         first_right = True
 
-        for b in right_blocks:
+        for b_item in right_blocks_ordered:
+            b, b_type = b_item
             text = b["en_text"]
-            t_lower = text.lower()
-
-            is_main_keywords = any(k in t_lower for k in ["student of", "having completed", "hereby granted", "hereby awarded", "completed senior", "born on", "native of", "satisfactory academic", "satisfactory results"])
-            is_main = is_main_keywords or (len(text) > 70 and not "principal" in t_lower)
-            is_principal = not is_main and "principal" in t_lower
-            is_date = not is_main and not is_principal and (
-                "date of issue" in t_lower or "date:" in t_lower or 
-                (len(text) < 40 and any(m in t_lower for m in ["july", "june", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"]))
-            )
-            is_title = not is_main and not is_principal and not is_date and any(k in t_lower for k in ["graduation", "diploma", "certificate", "jiangsu province"])
 
             if first_right:
                 p = p_right_first
@@ -196,37 +215,31 @@ class DocxService:
             else:
                 p = cell_right.add_paragraph()
 
-            if is_title:
+            if b_type == "title":
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p.paragraph_format.space_before = Pt(24)  # 标题同步下移
+                p.paragraph_format.space_before = Pt(24)
                 p.paragraph_format.space_after = Pt(22)
                 self._add_formatted_runs(p, text, default_font_size=16.0, default_bold=True)
-            elif is_main:
+            elif b_type == "main":
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 p.paragraph_format.space_before = Pt(10)
                 p.paragraph_format.space_after = Pt(22)
                 p.paragraph_format.line_spacing = 1.35
                 self._add_formatted_runs(p, text, default_font_size=13.5, default_bold=False)
-            elif is_principal:
+            elif b_type == "principal":
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 p.paragraph_format.space_before = Pt(20)
-                p.paragraph_format.space_after = Pt(15)
+                p.paragraph_format.space_after = Pt(12)
                 self._add_formatted_runs(p, text, default_font_size=13.5, default_bold=False)
-            elif is_date:
+            elif b_type == "date":
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                p.paragraph_format.space_before = Pt(15)
+                p.paragraph_format.space_before = Pt(12)
                 p.paragraph_format.space_after = Pt(10)
                 self._add_formatted_runs(p, text, default_font_size=13.0, default_bold=False)
-            else:
-                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(5)
-                p.paragraph_format.space_after = Pt(5)
-                self._add_formatted_runs(p, text, default_font_size=12.0, default_bold=False)
 
         # ==================== C. 原生页脚挂载 (绝对固定底层) ====================
         footer = section.footer
         
-        # 1. 顶部贯穿分割黑线条（挂载于页脚首段顶边框，100% 贯穿）
         p_line = footer.paragraphs[0]
         p_line.paragraph_format.space_before = Pt(0)
         p_line.paragraph_format.space_after = Pt(6)
@@ -238,7 +251,6 @@ class DocxService:
         )
         p_line._p.get_or_add_pPr().append(parse_xml(pBdr_xml))
 
-        # 2. 底部声明 + 印章双栏表（完全置于页脚内部，绝对不位移）
         footer_table = footer.add_table(rows=1, cols=2, width=Inches(10.49))
         footer_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         footer_table.autofit = False
@@ -283,7 +295,7 @@ class DocxService:
             except Exception as e:
                 print(f"Warning: Failed to add seal picture to footer: {e}")
 
-        # 5. 保存文档
+        # 保存文档
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"translated_certificate_{timestamp}.docx"
         file_path = self.output_dir / filename
@@ -292,8 +304,7 @@ class DocxService:
         return {
             "filename": filename,
             "download_url": f"/api/download/{filename}",
-            "block_count": len(left_blocks) + len(right_blocks)
+            "block_count": len(left_blocks) + len(right_blocks_ordered)
         }
 
-docx_service = DocxService()
 docx_service = DocxService()
