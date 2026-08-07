@@ -37,7 +37,7 @@ class DocxService:
 
     def _append_to_body(self, doc: Document, xml_str: str):
         element = parse_xml(xml_str)
-        sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
+        sectPr = doc.element.body.find('{[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)}sectPr')
         if sectPr is not None:
             sectPr.addprevious(element)
         else:
@@ -85,7 +85,7 @@ class DocxService:
         txbx_content = "".join(p_runs)
         doc_id = self._get_next_id()
 
-        xml = f'''<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        xml = f'''<w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
                      xmlns:v="urn:schemas-microsoft-com:vml">
           <w:r>
             <w:pict>
@@ -109,7 +109,7 @@ class DocxService:
         right_pt = (left_in + width_in) * 72.0
         doc_id = self._get_next_id()
 
-        xml = f'''<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        xml = f'''<w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
                      xmlns:v="urn:schemas-microsoft-com:vml">
           <w:r>
             <w:pict>
@@ -130,10 +130,10 @@ class DocxService:
         height_pt = height_in * 72.0
         doc_id = self._get_next_id()
 
-        xml = f'''<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+        xml = f'''<w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
                      xmlns:v="urn:schemas-microsoft-com:vml"
                      xmlns:o="urn:schemas-microsoft-com:office:office"
-                     xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+                     xmlns:r="[http://schemas.openxmlformats.org/officeDocument/2006/relationships](http://schemas.openxmlformats.org/officeDocument/2006/relationships)">
           <w:r>
             <w:pict>
               <v:shape id="seal_{doc_id}" type="#_x0000_t75"
@@ -178,9 +178,8 @@ class DocxService:
         footer_top_in = page_h_in - 1.8
         max_content_bottom_in = footer_top_in - 0.25
 
-        # 核心版面中缝界线设置
-        left_column_max_x = page_w_in * 0.40   # 左半页最大右边界 (约 4.67 英寸)
-        right_column_min_x = page_w_in * 0.45  # 右半页最小左起点 (约 5.26 英寸)
+        left_column_max_x = page_w_in * 0.40   # 左侧限制屏障
+        right_column_min_x = page_w_in * 0.48  # 右侧起点屏障
 
         # 1. 绘制 Photo 照片框
         photo_xml = self._create_textbox_vml(
@@ -195,7 +194,7 @@ class DocxService:
         )
         self._append_to_body(doc, photo_xml)
 
-        # 2. 填充正文文本块（强行设立左右半页物理屏障）
+        # 2. 填充正文文本块
         count = 0
         min_top_in = 0.5
         usable_height_in = max_content_bottom_in - min_top_in
@@ -212,41 +211,52 @@ class DocxService:
             rel_h = bbox_rel.get("height", 0.03)
 
             char_count = len(en_text)
-            is_title = any(k in en_text.lower() for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
-            is_right_half = rel_left >= 0.42  # 阈值判断属于左半页还是右半页
+            en_lower = en_text.lower()
+
+            is_title = any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
+            
+            # 💡 强行锁定右半页的元素关键字（校长、签名、发证日期等）
+            is_right_page_keyword = any(k in en_lower for k in ["principal", "headmaster", "signature", "graduation", "diploma", "having completed", "granted graduation"])
+            is_right_half = (rel_left >= 0.42) or is_right_page_keyword
 
             if is_right_half:
-                # --- 右半页处理规则 ---
-                font_size_pt = 16.0 if is_title else 14.0  # 右侧四号 (14pt)
+                # --- 右半页算法 ---
+                font_size_pt = 16.0 if is_title else 14.0  # 右半页：四号 (14pt)
                 is_bold = is_title
-                
-                # 强制起点必须在右侧安全线以右
+
                 left_in = max(rel_left * page_w_in, right_column_min_x)
                 top_in = min_top_in + (rel_top * usable_height_in * 0.85)
 
-                needed_w_in = char_count * (font_size_pt * 0.0068)
-                max_allowed_w = page_w_in - left_in - 0.4
-                width_in = min(max(rel_w * page_w_in * 1.2, needed_w_in), max_allowed_w)
-                width_in = max(1.5, width_in)
+                # 💡【解决图三图四】：如果是签名或印章说明等短块，拓宽宽度保证 100% 1行显示！
+                is_short_label = any(k in en_lower for k in ["principal", "signature", "seal of", "date", "july", "june"])
+                if is_short_label:
+                    needed_w_in = char_count * (font_size_pt * 0.0095) + 0.5
+                    width_in = min(needed_w_in, page_w_in - left_in - 0.2)
+                    width_in = max(3.5, width_in)
+                else:
+                    needed_w_in = char_count * (font_size_pt * 0.0075)
+                    max_allowed_w = page_w_in - left_in - 0.3
+                    width_in = min(max(rel_w * page_w_in * 1.2, needed_w_in), max_allowed_w)
+                    width_in = max(1.5, width_in)
 
             else:
-                # --- 左半页处理规则 ---
-                font_size_pt = 11.5  # 左侧小四 (11.5-12pt)
+                # --- 左半页算法 ---
+                font_size_pt = 11.5  # 左半页：小四 (11.5-12pt)
                 is_bold = False
 
                 left_in = rel_left * page_w_in
                 top_in = min_top_in + (rel_top * usable_height_in * 0.85)
 
-                # 💡 核心限制：左侧文本的宽度绝对不能跨越 left_column_max_x 屏障！
-                max_allowed_w = max(1.0, left_column_max_x - left_in)
-                needed_w_in = char_count * (font_size_pt * 0.0065)
+                # 💡【解决图三图四】：左侧单行印章说明/学籍号加宽，且严格不越过右边界
+                max_allowed_w = max(1.5, left_column_max_x - left_in)
+                needed_w_in = char_count * (font_size_pt * 0.0085) + 0.3
                 width_in = min(needed_w_in, max_allowed_w)
-                width_in = max(1.0, width_in)
+                width_in = max(1.2, width_in)
 
-            # 计算高度（如果字太长，在受限的宽度内自动向下多行折行）
+            # 单行与多行高度计算
             chars_per_line = max(10, int((width_in * 72) / (font_size_pt * 0.55)))
             estimated_lines = math.ceil(char_count / chars_per_line)
-            single_line_h_in = (font_size_pt / 72.0) * 1.4
+            single_line_h_in = (font_size_pt / 72.0) * 1.45
             calculated_h_in = estimated_lines * single_line_h_in
             
             height_in = max(rel_h * page_h_in, calculated_h_in)
