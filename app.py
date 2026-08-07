@@ -77,7 +77,7 @@ if uploaded_file is not None:
         st.subheader("📦 批量处理模式")
         st.info(f"已检测到压缩包文件：`{uploaded_file.name}`，准备进行批量识别与翻译。")
 
-        if st.button("🚀 开始批量翻译与打包", type="primary", use_container_width=True):
+        if st.button("🚀 开始批量翻译与打包", type="primary", width="stretch"):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp_dir_path = Path(tmp_dir)
                 archive_path = tmp_dir_path / uploaded_file.name
@@ -167,7 +167,7 @@ if uploaded_file is not None:
                             file_name="translated_certificates_all.zip",
                             mime="application/zip",
                             type="primary",
-                            use_container_width=True
+                            width="stretch"
                         )
                     else:
                         st.error("❌ 未能成功生成任何 Word 文档。")
@@ -178,12 +178,12 @@ if uploaded_file is not None:
         
         with col1:
             st.subheader("📷 原始证书预览")
-            st.image(uploaded_file, use_container_width=True)
+            st.image(uploaded_file, width="stretch")
             
         with col2:
             st.subheader("🚀 翻译与生成")
             
-            if st.button("✨ 开始智能翻译与生成 Word", type="primary", use_container_width=True):
+            if st.button("✨ 开始智能翻译与生成 Word", type="primary", width="stretch"):
                 suffix = Path(uploaded_file.name).suffix or ".jpg"
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
                     tmp_file.write(uploaded_file.getvalue())
@@ -217,7 +217,7 @@ if uploaded_file is not None:
                             file_name=generated_filename,
                             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                             type="primary",
-                            use_container_width=True
+                            width="stretch"
                         )
                     else:
                         st.error("找不到生成的 Word 文件。")
