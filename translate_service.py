@@ -70,36 +70,37 @@ class TranslationService:
 
 {input_json_str}
 
-【核心任务：必须完整提取【左半页】与【右半页】的所有文本块，严禁遗漏左半页！】：
+【最高准则：100% 忠实原图！图中有的才翻译，图中没有的【绝对禁止】凭空脑补/添加！】
 
-一、左半页文本块提取（bbox_rel.left 统一设为 0.08）：
-请仔细观察图片左半页，必须完整提取并翻译以下要素：
-1. 【教育主管部门验印章说明】：翻译为 `(Seal of the education authority for verification)`。
-2. 【学籍号】：提取真实编号，翻译为 `Student Registration Number: <b>[编号]</b>`。
-3. 【毕证字号】：提取真实编号，翻译为 `Graduation Certificate Number: <b>[编号]</b>`。
-4. 【学校行政公章说明】：翻译为 `(Official seal of [学校英文名称])`，如 `(Official seal of Jingjiang Liu Guojun High School)`。
-5. 【补办无效说明】：翻译为 `Not Reissued if Lost`。
-6. 【钢印说明】（若有）：翻译为 `(School embossed seal)`。
+请仔细审视图片，严格遵守以下提取与消歧规范：
 
-二、右半页文本块提取（bbox_rel.left 统一设为 0.52）：
-必须分割为以下 4 个独立的文本块：
-1. 【证书标题块 (Title)】（据实翻译！）：
-   - 认读图片右半页顶部的中文标题据实翻译：
-     * 若文字为“江苏省高中毕业证书” -> 必须据实翻译为 `"Senior High School Graduation Certificate of Jiangsu Province"`；
-     * 若文字为“普通高中毕业证书” -> 必须据实翻译为 `"General Senior High School Graduation Certificate"`；
-     * 若文字为“毕业证书” -> 必须据实翻译为 `"Graduation Certificate"` 或 `"Graduation Diploma"`；
-2. 【毕业正文长句块 (Main Body)】：
-   - 将学生姓名、籍贯、性别、年龄/出生年月、入学/毕业时间、修业年限、成绩合格、准予毕业的所有文字，【100% 完整合成为唯一一条标准英文公证长句】，并使用 `<b>...</b>` 加粗关键实体！
-3. 【校长签名块 (Principal)】：
-   - 只从“校长签印”正右侧提取手写体/方印，翻译为 `Principal: <b>[签名拼音]</b> (Signature seal)`。
-4. 【发证日期块 (Date)】：
-   - 从右下角提取中文日期，翻译为 `Date of Issue: <b>[英文日期]</b>`。
+1. 【零脑补原则（极其重要！）】：
+   - 必须【100% 完全依据图片】中实际印有的文字与印章进行提取翻译！
+   - 图片中【存在什么就翻译什么】，图片中【没有的内容绝对禁止添加】！
+   - 示例 1：若图片左半页【没有】“补办无效/遗失不补”等中文，【绝对禁止】输出 `Not Reissued if Lost`！
+   - 示例 2：若图片左半页【没有】“加盖钢印”等字样，【绝对禁止】输出 `(School embossed seal)`！
 
-【通用消歧规则】：
-- 中国学校名称常包含名人姓名（如“刘国钧中学”）。【绝对禁止】将学校名称中的字词当作校长名字！校长名字只从“校长签印”正右方的文字提取！
+2. 【左半页要素据实提取】（bbox_rel.left 设为 0.08）：
+   - 仅对图片左半页【实际印有】的内容进行提取：
+     * 若有“教育主管部门验印专用章”文本/印章，翻译为 `(Seal of the education authority for verification)`；
+     * 若有“学籍号”，提取对应编号，翻译为 `Student Registration Number: <b>[编号]</b>`；
+     * 若有“毕证字”，提取对应编号，翻译为 `Graduation Certificate Number: <b>[编号]</b>`；
+     * 若有学校行政公章（如“靖江市刘国钧中学”），翻译为 `(Official seal of Jingjiang Liu Guojun High School)`；
+     * 若无其他说明文字，【绝对不要】自己捏造！
+
+3. 【校长签名草书精准识别与消歧】：
+   - 请用眼睛精细观察【校长签印】这四个字正右侧的蓝色/黑色手写连笔字：
+     * 辨认草书汉字 **“吴俊”**（吴：口+天；俊：亻+夋） -> 精准翻译为 `Principal: <b>Wu Jun</b> (Signature seal)`！
+     * 绝对禁止凭空猜测为“Zhang Zhi”、“Liu Guo”等不相干人名！
+     * 若手写笔迹极度模糊无法 100% 确认具体汉字，请安全降级输出为 `Principal: (Signature seal)`，绝不可臆造虚构姓氏！
+
+4. 【右半页标题与正文据实翻译】（bbox_rel.left 设为 0.52）：
+   - 标题：认读顶部实际中文标题据实翻译（如“江苏省高中毕业证书” -> `Senior High School Graduation Certificate of Jiangsu Province`；“普通高中毕业证书” -> `General Senior High School Graduation Certificate`；“毕业证书” -> `Graduation Certificate`）。
+   - 正文长句：将学生姓名、籍贯、性别、年龄/出生年月、修业时间、成绩合格、准予毕业的所有文字，【100% 合成为唯一一条标准英文公证长句】，并使用 `<b>...</b>` 加粗关键实体！
+   - 发证日期：据实提取右下角中文日期（如“二〇二六年七月十日” -> `Date of Issue: <b>July 10, 2026</b>`）。
 
 【输出要求】：
-直接返回标准的 JSON 数组，必须包含左半页与右半页的全部文本块，格式形如：
+直接返回标准的 JSON 数组，必须仅包含图片中实际存在的文本块，格式形如：
 [
   {{
     "en_text": "(Seal of the education authority for verification)",
@@ -135,7 +136,7 @@ class TranslationService:
                 })
 
             messages = [
-                {"role": "system", "content": "你是一个严格提取完整左右半页所有元素并据实翻译标题的专业公证翻译助手。"},
+                {"role": "system", "content": "你是一个严格遵循 100% 忠实原图零脑补原则与草书签名精准辨识规则的专业公证翻译助手。"},
                 {"role": "user", "content": content_list}
             ]
 
