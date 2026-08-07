@@ -43,7 +43,7 @@ class TranslationService:
 
             max_size = 1280
             if max(img.width, img.height) > max_size:
-                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                img.thumbnail((max_size, max_size), Image Resampling.LANCZOS)
 
             buffer = io.BytesIO()
             img.save(buffer, format="JPEG", quality=85)
@@ -65,39 +65,39 @@ class TranslationService:
 
         input_json_str = json.dumps(input_blocks, ensure_ascii=False, indent=2)
 
-        prompt_text = f"""你是一名精通中国官方毕业证书/学位证书公证翻译的视觉大模型专家。
-附件是一张毕业证书的原图，下方是从图片中初步提取到的文本块 JSON 数组：
+        prompt_text = f"""你是一名精通中国官方毕业证书公证翻译的视觉大模型专家。
+附件是一张毕业证书的原图，下方是从图片中提取到的原始中文 OCR 碎片：
 
 {input_json_str}
 
-【通用实体提取与真实位置消歧规则】：
+【最高指令：100% 翻译为规范英文！绝对禁止返回中文字符或原始中文碎片！】
 
-1. 【证书标题 (Title)】（必须严格根据原图顶部实际文字据实翻译！）：
-   - 请仔细认读证书顶部（或主体上方）的中文标题文字：
-     * 若原图标题写着“毕业文凭” -> 翻译为 `"Graduation Diploma"`；
-     * 若原图标题写着“毕业证书” -> 翻译为 `"Graduation Certificate"`；
-     * 若原图标题写着“江苏省高中毕业证书” -> 翻译为 `"Senior High School Graduation Certificate of Jiangsu Province"`；
-     * 若原图标题写着“普通高中毕业证书” -> 翻译为 `"General Senior High School Graduation Certificate"`；
-   - 【严禁事项】：绝对不要统一套用某个固定标题！原图实际印什么标题，就据实翻译什么标题！
+请严格按照以下结构，将所有内容翻译并组装为全英文的 JSON 数组：
 
-2. 【印章与公章说明 (Seals)】（据实位置，在哪半边就标注哪半边的坐标）：
-   - 观察印章（如学校行政公章、教育局验印章、钢印等）在原图中的真实物理位置：
-     * 若印章位于图片左半页 -> bbox_rel.left 标注为 0.08 ~ 0.20；
-     * 若印章位于图片右半页（例如盖在右侧正文下方或右下角） -> bbox_rel.left 标注为 0.52 ~ 0.70；
-   - 翻译格式示例：`(Official seal of [学校英文名])`、`(Seal of the education authority for verification)`、`(School embossed seal)`。
+一、右半页 (bbox_rel.left 设为 0.52)：
+1. 【证书标题 (Title)】：认读原图顶部实际标题翻译（如“毕业文凭” -> "Graduation Diploma"；“毕业证书” -> "Graduation Certificate"）。
+2. 【正文英文长句 (Main Body)】：
+   - 必须将正文中所有零散的学生姓名、性别、出生年月、籍贯、学校名称、修业年限、成绩合格、准予毕业等中文碎片，【100% 缝合成唯一一条完整流畅的标准英文公证长句】！
+   - 示例："Gu Shuhan, female, born in June 2008, native of Qidong City, Jiangsu Province, studied at Qidong Huilong High School from September 2023 to June 2026, completed three years of senior high school education, passed all examinations with satisfactory results, and is hereby granted graduation."
+3. 【校长签名 (Principal)】：认读“校长（签印）”旁的草书姓名（如“胡勇”），翻译为 `Principal: <b>Hu Yong</b> (Signature seal)`。
+4. 【发证日期 (Date)】：据实翻译日期，如 `Date of Issue: <b>July 1, 2026</b>`。
 
-3. 【正文长句 (Main Body)】：
-   - 包含学生姓名、性别、出生年月/年龄、籍贯、学校名称、修业年限、成绩合格、准予毕业等全部正文信息。
-   - 100% 缝合成一条标准英文公证长句，并用 `<b>...</b>` 标签包裹实体。
+二、左半页 (bbox_rel.left 设为 0.08)：
+1. 翻译学籍号：`Student Registration Number: <b>[编号]</b>`
+2. 翻译毕业证号：`Graduation Certificate Number: <b>[编号]</b>`
+3. 翻译印章说明：`(Official seal of Qidong Huilong High School)`、`(Seal of the education authority for verification)`、`(School embossed seal)`。
+4. 翻译说明事项：`Note: This certificate is invalid without the verification seal. Not reissued if lost.`
 
-4. 【校长签名 (Principal)】：
-   - 观察“校长（签印）”/“校长：”区域的手写字迹或名章。据实拼读识别汉字并翻译为拼音，如 `Principal: <b>[签名拼音]</b> (Signature seal)`。若字迹潦草无法确认，降级输出为 `Principal: (Signature seal)`。绝不捏造名字！
+【严禁事项】：
+- 绝对不要把未翻译的中文词块返回在 en_text 中！
+- 绝对不要将正文拆成 10 几个中文碎片句段输出，必须合成为唯一一条英文长句！
 
-5. 【发证日期 (Date)】：
-   - 据实提取日期，格式为 `Date of Issue: <b>[英文日期]</b>`。
-
-【输出要求】：
-直接返回标准的 JSON 数组，必须包含识别并翻译的所有文本块，严禁使用 Markdown 代码块！
+直接返回标准的 JSON 数组，格式形如：
+[
+  {{"en_text": "Graduation Diploma", "bbox_rel": {{"left": 0.52, "top": 0.1}}}},
+  {{"en_text": "Gu Shuhan, female, born in June 2008...", "bbox_rel": {{"left": 0.52, "top": 0.25}}}}
+]
+严禁使用 Markdown 代码块！
 """
 
         try:
@@ -114,7 +114,7 @@ class TranslationService:
                 })
 
             messages = [
-                {"role": "system", "content": "你是一个严格据实认读原图标题与真实印章坐标位置的专业公证翻译助手。"},
+                {"role": "system", "content": "你是一个严禁透传中文碎片、必须将所有正文缝合成规范英文长句的专业公证翻译助手。"},
                 {"role": "user", "content": content_list}
             ]
 
