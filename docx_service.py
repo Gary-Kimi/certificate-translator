@@ -5,15 +5,37 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 from docx import Document
-from docx.shared import Inches, Pt
+from docx.shared import Inches
 from docx.enum.section import WD_ORIENT
 from docx.oxml import parse_xml
 import config
 
+# 标准完整的 OpenXML 命名空间声明，防止 Word 解析丢弃
+ALL_NAMESPACES = (
+    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+    'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+    'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" '
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+    'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"'
+)
+
 class DocxService:
     def __init__(self):
         self.output_dir = config.OUTPUT_DIR
-        self.seal_path = Path(__file__).resolve().parent / "seal.png"  # 公章图片路径
+        # 兼容根目录与当前目录下的 seal.png
+        self.seal_path = Path("seal.png")
+        if not self.seal_path.exists():
+            self.seal_path = Path(__file__).resolve().parent / "seal.png"
+
+    def _append_to_body(self, doc: Document, xml_str: str):
+        """核心修复：确保所有 OpenXML 元素都插入在 sectPr (分节符) 之前，防止被 Word 忽略"""
+        element = parse_xml(xml_str)
+        sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
+        if sectPr is not None:
+            sectPr.addprevious(element)
+        else:
+            doc.element.body.append(element)
 
     def _create_textbox_xml(
         self, 
@@ -26,23 +48,17 @@ class DocxService:
         show_border: bool = False,
         align_center: bool = False
     ) -> str:
-        """生成带绝对定位的 Word 透明/带边框文本框"""
         left_emu = int(left_in * 914400)
         top_emu = int(top_in * 914400)
         width_emu = int(width_in * 914400)
         height_emu = int(height_in * 914400)
 
         safe_text = html.escape(text)
-
-        # 边框设置：Photo 框显示浅灰色边框，普通文本框无边框
         border_xml = '<a:ln w="12700"><a:solidFill><a:srgbClr val="B0B0B0"/></a:solidFill></a:ln>' if show_border else '<a:ln w="9525"><a:noFill/></a:ln>'
         align_xml = '<w:jc w:val="center"/>' if align_center else ''
 
         xml = f'''
-        <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-             xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
-             xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
-             xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+        <w:p {ALL_NAMESPACES}>
           <w:r>
             <w:drawing>
               <wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="251658240" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
@@ -103,17 +119,13 @@ class DocxService:
         return xml
 
     def _create_floating_image_xml(self, rId: str, left_in: float, top_in: float, width_in: float, height_in: float) -> str:
-        """生成浮动在最上层的印章图片 XML"""
         left_emu = int(left_in * 914400)
         top_emu = int(top_in * 914400)
         width_emu = int(width_in * 914400)
         height_emu = int(height_in * 914400)
 
         xml = f'''
-        <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-             xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
-             xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
-             xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
+        <w:p {ALL_NAMESPACES}>
           <w:r>
             <w:drawing>
               <wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="251658240" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
@@ -188,28 +200,20 @@ class DocxService:
         section.left_margin = Inches(0)
         section.right_margin = Inches(0)
 
-        # ==========================================
-        # 1. 添加 [Photo] 照片占位框 (在左上方固定位置)
-        # ==========================================
-        photo_left = 1.0
-        photo_top = 0.8
-        photo_w = 1.3
-        photo_h = 1.7
+        # 1. 绘制 [Photo] 照片占位框 (左上方)
         photo_xml = self._create_textbox_xml(
             text="Photo",
-            left_in=photo_left,
-            top_in=photo_top,
-            width_in=photo_w,
-            height_in=photo_h,
+            left_in=1.0,
+            top_in=0.8,
+            width_in=1.3,
+            height_in=1.7,
             font_size_pt=11.0,
             show_border=True,
             align_center=True
         )
-        doc.element.body.append(parse_xml(photo_xml))
+        self._append_to_body(doc, photo_xml)
 
-        # ==========================================
         # 2. 填充正文所有识别并翻译的文本块
-        # ==========================================
         count = 0
         for block in blocks:
             en_text = block.get("en_text", "").strip()
@@ -256,20 +260,14 @@ class DocxService:
                 height_in=height_in,
                 font_size_pt=font_size_pt
             )
-            doc.element.body.append(parse_xml(xml_str))
+            self._append_to_body(doc, xml_str)
             count += 1
 
-        # ==========================================
-        # 3. 添加底部公证落款 (横线 + 图二对应文字)
-        # ==========================================
-        footer_top_in = page_h_in - 1.6  # 距页面底部 1.6 英寸处
+        # 3. 绘制底部公证落款 (分割线 + 声明文字)
+        footer_top_in = page_h_in - 1.8
         
-        # 3.1 绘制顶部黑线
         line_xml = f'''
-        <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-             xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
-             xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
-             xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+        <w:p {ALL_NAMESPACES}>
           <w:r>
             <w:drawing>
               <wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="251658240" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
@@ -310,9 +308,8 @@ class DocxService:
           </w:r>
         </w:p>
         '''
-        doc.element.body.append(parse_xml(line_xml))
+        self._append_to_body(doc, line_xml)
 
-        # 3.2 绘制落款文字内容（按图二标准文字格式）
         curr_date = datetime.now().strftime("%b %d, %Y")
         footer_text = (
             f"I confirm the above translation is an accurate translation of the Original document.\n"
@@ -329,35 +326,24 @@ class DocxService:
             left_in=0.5,
             top_in=footer_top_in + 0.08,
             width_in=page_w_in - 1.0,
-            height_in=1.4,
+            height_in=1.6,
             font_size_pt=8.5
         )
-        doc.element.body.append(parse_xml(footer_text_xml))
+        self._append_to_body(doc, footer_text_xml)
 
-        # ==========================================
-        # 4. 浮动叠加印章 (图片位于落款右侧压盖)
-        # ==========================================
+        # 4. 浮动压盖印章图片
         if self.seal_path.exists():
-            # 引入图片关系 rId
             rId, _ = doc.part.get_or_add_image(str(self.seal_path))
-            
-            seal_w = 1.8  # 印章宽度
-            seal_h = 1.5  # 印章高度
-            seal_left = page_w_in - 4.2  # 压在文字右侧
-            seal_top = footer_top_in + 0.1
-
             seal_xml = self._create_floating_image_xml(
                 rId=rId,
-                left_in=seal_left,
-                top_in=seal_top,
-                width_in=seal_w,
-                height_in=seal_h
+                left_in=page_w_in - 4.2,
+                top_in=footer_top_in + 0.1,
+                width_in=1.8,
+                height_in=1.5
             )
-            doc.element.body.append(parse_xml(seal_xml))
+            self._append_to_body(doc, seal_xml)
 
-        # ==========================================
         # 5. 保存文档
-        # ==========================================
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"translated_certificate_{timestamp}.docx"
         file_path = self.output_dir / filename
