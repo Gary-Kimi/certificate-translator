@@ -11,7 +11,6 @@ from docx.oxml import parse_xml
 from docx.oxml.ns import nsmap, nsdecls
 import config
 
-# 注册 VML 和 Office 命名空间
 nsmap['v'] = 'urn:schemas-microsoft-com:vml'
 nsmap['o'] = 'urn:schemas-microsoft-com:office:office'
 
@@ -39,7 +38,7 @@ class DocxService:
             return ""
         cleaned = text.replace('\xa0', ' ').replace('\u200b', '')
         cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', cleaned)
-        return html.escape(cleaned)
+        return cleaned
 
     def _append_to_body(self, doc: Document, xml_str: str):
         element = parse_xml(xml_str)
@@ -48,6 +47,44 @@ class DocxService:
             sectPr.addprevious(element)
         else:
             doc.element.body.append(element)
+
+    def _parse_inline_runs_xml(self, line_text: str, font_size_pt: float, base_is_bold: bool = False) -> str:
+        """
+        💡 核心渲染引擎：解析 <b>...</b> 标签，实现同一行内部分文字加粗（如 Cao Shuo, male 等）
+        """
+        clean_line = self._clean_text(line_text)
+        parts = re.split(r'(<b>.*?</b>)', clean_line, flags=re.IGNORECASE)
+        sz_val = int(font_size_pt * 2)
+        runs_xml = []
+
+        for part in parts:
+            if not part:
+                continue
+            
+            is_bold = base_is_bold
+            txt_content = part
+
+            if part.lower().startswith("<b>") and part.lower().endswith("</b>"):
+                is_bold = True
+                txt_content = part[3:-4]
+
+            safe_txt = html.escape(txt_content)
+            bold_xml = '<w:b/>' if is_bold else ''
+
+            run = (
+                f'<w:r>'
+                f'<w:rPr>'
+                f'<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+                f'{bold_xml}'
+                f'<w:sz w:val="{sz_val}"/>'
+                f'<w:color w:val="000000"/>'
+                f'</w:rPr>'
+                f'<w:t xml:space="preserve">{safe_txt}</w:t>'
+                f'</w:r>'
+            )
+            runs_xml.append(run)
+
+        return "".join(runs_xml)
 
     def _create_textbox_vml(
         self, 
@@ -67,7 +104,6 @@ class DocxService:
         width_pt = width_in * 72.0
         height_pt = height_in * 72.0
 
-        safe_text = self._clean_text(text)
         stroked = "t" if show_border else "f"
         
         if align_center:
@@ -77,23 +113,14 @@ class DocxService:
         else:
             align_xml = ''
 
-        bold_xml = '<w:b/>' if is_bold else ''
-
-        lines = safe_text.split('\n')
+        lines = text.split('\n')
         p_runs = []
         for line in lines:
+            inline_runs = self._parse_inline_runs_xml(line, font_size_pt, base_is_bold=is_bold)
             p_runs.append(
                 f'<w:p>'
-                f'<w:pPr>{align_xml}<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
-                f'<w:r>'
-                f'<w:rPr>'
-                f'<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
-                f'{bold_xml}'
-                f'<w:sz w:val="{int(font_size_pt * 2)}"/>'
-                f'<w:color w:val="000000"/>'
-                f'</w:rPr>'
-                f'<w:t>{line}</w:t>'
-                f'</w:r>'
+                f'<w:pPr>{align_xml}<w:spacing w:before="0" w:after="0" w:line="280" w:lineRule="auto"/></w:pPr>'
+                f'{inline_runs}'
                 f'</w:p>'
             )
         txbx_content = "".join(p_runs)
@@ -194,13 +221,20 @@ class DocxService:
 
         footer_top_in = page_h_in - 1.8
 
-        # 1. 照片框 (位置: left=1.8, top=0.6, width=1.3)
+        # ==================== 1. 左半区设置 (总宽 4.4 英寸, 中心轴 X = 2.4 英寸) ====================
+        left_area_width = 4.0
+        left_area_x = 0.4
+        left_center_x = left_area_x + (left_area_width / 2.0)  # 2.4 英寸
+
+        # 1.1 绘制居中的 Photo 照片框 (宽 1.3, X = 2.4 - 0.65 = 1.75)
+        photo_width = 1.3
+        photo_left = left_center_x - (photo_width / 2.0)
         photo_xml = self._create_textbox_vml(
             text="Photo",
-            left_in=1.8,
+            left_in=photo_left,
             top_in=0.6,
-            width_in=1.3,
-            height_in=1.7,
+            width_in=photo_width,
+            height_in=1.65,
             font_size_pt=11.0,
             show_border=True,
             align_center=True
@@ -227,8 +261,8 @@ class DocxService:
             en_lower = en_text.lower()
 
             is_title = any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
-            is_right_kw = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation", "date of issue", "june", "july"])
-            is_left_kw = any(k in en_lower for k in ["student id", "diploma no", "certificate no", "issuance no", "embossed seal"])
+            is_right_kw = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation", "date of issue", "june", "july", "student of"])
+            is_left_kw = any(k in en_lower for k in ["student registration", "diploma number", "certificate number", "embossed seal", "reissued if lost"])
 
             normalized_block = {
                 "en_text": en_text,
@@ -245,72 +279,79 @@ class DocxService:
 
         count = 0
 
-        # ==================== A. 左栏全量绘制（向右平移至 Photo 正下方） ====================
-        left_y = 2.4
+        # ==================== A. 左半区全量绘制 (居中对齐) ====================
+        left_y = 2.45
         for b in left_blocks:
             text = b["en_text"]
             t_lower = text.lower()
-            is_small = text.startswith("(") or "seal" in t_lower or "no" in t_lower
-            font_sz = 9.5 if is_small else 11.5
-            lines_cnt = math.ceil(len(text) / 45)
+            is_small = text.startswith("(") or "seal" in t_lower or "not reissued" in t_lower
+            font_sz = 9.5 if is_small else 11.0
+            
+            raw_len = len(re.sub(r'<[^>]+>', '', text))
+            lines_cnt = math.ceil(raw_len / 42)
             h_in = max(0.35, lines_cnt * 0.25)
 
-            # 💡【核心改动】：起点平移至 0.8 英寸，使文本自然对齐位于 Photo 框正下方
-            xml = self._create_textbox_vml(text, 0.8, left_y, 3.8, h_in, font_size_pt=font_sz)
+            xml = self._create_textbox_vml(
+                text=text,
+                left_in=left_area_x,
+                top_in=left_y,
+                width_in=left_area_width,
+                height_in=h_in,
+                font_size_pt=font_sz,
+                align_center=True  # 💡核心设置：在左半区水平居中对齐！
+            )
             self._append_to_body(doc, xml)
-            left_y += h_in + 0.15
+            left_y += h_in + 0.12
             count += 1
 
-        # ==================== B. 右栏全量绘制 ====================
+        # ==================== B. 右半区美化绘制 (对齐原图) ====================
         right_y = 0.8
+        right_area_x = 4.8
+        right_area_w = page_w_in - right_area_x - 0.5
+
         for b in right_blocks:
             text = b["en_text"]
             t_lower = text.lower()
             
             is_title = any(k in t_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
-            is_main = len(text) > 40 or "having completed" in t_lower or "awarded graduation" in t_lower
-            is_principal_or_date = "principal" in t_lower or "date of issue" in t_lower or any(m in t_lower for m in ["june", "july", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"])
+            is_main = len(text) > 40 or "student of" in t_lower or "awarded graduation" in t_lower or "granted graduation" in t_lower
+            is_principal_or_date = "principal" in t_lower or "date of issue" in t_lower or any(m in t_lower for m in ["june", "july", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"]) or text.isdigit()
 
             align_right = is_principal_or_date and not is_main
+            align_center = is_title
 
             if is_title:
-                font_sz = 15.0
+                font_sz = 16.0
                 bold = True
-                h_in = 0.45
+                h_in = 0.5
                 top_pos = 0.8
-                left_pos = 4.8
-                w_pos = page_w_in - 4.8 - 0.3
             elif is_main:
-                font_sz = 14.0
+                font_sz = 13.5
                 bold = False
-                lines_cnt = math.ceil(len(text) / 55)
-                h_in = max(1.5, lines_cnt * 0.35)
-                top_pos = max(1.8, right_y)
-                left_pos = 5.2
-                w_pos = page_w_in - 5.2 - 0.5
+                raw_len = len(re.sub(r'<[^>]+>', '', text))
+                lines_cnt = math.ceil(raw_len / 52)
+                h_in = max(1.8, lines_cnt * 0.38)
+                top_pos = max(1.6, right_y)
             elif is_principal_or_date:
-                font_sz = 14.0
+                font_sz = 13.0
                 bold = False
-                h_in = 0.4
-                top_pos = max(4.0, right_y)
-                left_pos = 5.2
-                w_pos = page_w_in - 5.2 - 0.5
+                h_in = 0.38
+                top_pos = max(4.1, right_y)
             else:
-                font_sz = 9.5 if "seal" in t_lower or text.startswith("(") else 14.0
+                font_sz = 10.0 if "seal" in t_lower or text.startswith("(") else 13.0
                 bold = False
                 h_in = 0.35
                 top_pos = right_y
-                left_pos = 5.2
-                w_pos = 4.2
 
             xml = self._create_textbox_vml(
                 text=text,
-                left_in=left_pos,
+                left_in=right_area_x,
                 top_in=top_pos,
-                width_in=w_pos,
+                width_in=right_area_w,
                 height_in=h_in,
                 font_size_pt=font_sz,
                 is_bold=bold,
+                align_center=align_center,
                 align_right=align_right
             )
             self._append_to_body(doc, xml)
