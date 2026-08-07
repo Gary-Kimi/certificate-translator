@@ -1,6 +1,7 @@
 import html
 import math
 import os
+import re
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +11,7 @@ from docx.enum.section import WD_ORIENT
 from docx.oxml import parse_xml
 import config
 
-# 标准完整的 OpenXML 命名空间声明，防止 Word 解析丢弃
+# 标准完整的 OpenXML 命名空间声明
 ALL_NAMESPACES = (
     'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
     'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
@@ -23,13 +24,26 @@ ALL_NAMESPACES = (
 class DocxService:
     def __init__(self):
         self.output_dir = config.OUTPUT_DIR
-        # 兼容根目录与当前目录下的 seal.png
         self.seal_path = Path("seal.png")
         if not self.seal_path.exists():
             self.seal_path = Path(__file__).resolve().parent / "seal.png"
+        self._id_counter = 1
+
+    def _get_next_id((self) -> int:
+        """生成全局严格递增且唯一的正整数 ID"""
+        self._id_counter += 1
+        return self._id_counter
+
+    def _clean_text(self, text: str) -> str:
+        """核心修复 1：过滤掉会导致 Word XML 损坏的 ASCII 控制字符"""
+        if not text:
+            return ""
+        # 剔除 XML 1.0 非法控制字符 (\x00-\x08, \x0B-\x0C, \x0E-\x1F)
+        cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
+        return html.escape(cleaned)
 
     def _append_to_body(self, doc: Document, xml_str: str):
-        """核心修复：确保所有 OpenXML 元素都插入在 sectPr (分节符) 之前，防止被 Word 忽略"""
+        """核心修复 2：确保元素插入在分节符 (sectPr) 之前"""
         element = parse_xml(xml_str)
         sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
         if sectPr is not None:
@@ -46,14 +60,15 @@ class DocxService:
         height_in: float, 
         font_size_pt: float = 9.0,
         show_border: bool = False,
-        align_center: bool = False
+        align_center: bool = False,
+        doc_pr_id: int = 1
     ) -> str:
         left_emu = int(left_in * 914400)
         top_emu = int(top_in * 914400)
         width_emu = int(width_in * 914400)
         height_emu = int(height_in * 914400)
 
-        safe_text = html.escape(text)
+        safe_text = self._clean_text(text)
         border_xml = '<a:ln w="12700"><a:solidFill><a:srgbClr val="B0B0B0"/></a:solidFill></a:ln>' if show_border else '<a:ln w="9525"><a:noFill/></a:ln>'
         align_xml = '<w:jc w:val="center"/>' if align_center else ''
 
@@ -72,7 +87,7 @@ class DocxService:
                 <wp:extent cx="{width_emu}" cy="{height_emu}"/>
                 <wp:effectExtent l="0" t="0" r="0" b="0"/>
                 <wp:wrapNone/>
-                <wp:docPr id="{uuid.uuid4().int % 100000}" name="TextBox"/>
+                <wp:docPr id="{doc_pr_id}" name="TextBox_{doc_pr_id}"/>
                 <wp:cNvGraphicFramePr/>
                 <a:graphic>
                   <a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
@@ -118,7 +133,7 @@ class DocxService:
         '''
         return xml
 
-    def _create_floating_image_xml(self, rId: str, left_in: float, top_in: float, width_in: float, height_in: float) -> str:
+    def _create_floating_image_xml(self, rId: str, left_in: float, top_in: float, width_in: float, height_in: float, doc_pr_id: int = 1) -> str:
         left_emu = int(left_in * 914400)
         top_emu = int(top_in * 914400)
         width_emu = int(width_in * 914400)
@@ -139,13 +154,13 @@ class DocxService:
                 <wp:extent cx="{width_emu}" cy="{height_emu}"/>
                 <wp:effectExtent l="0" t="0" r="0" b="0"/>
                 <wp:wrapNone/>
-                <wp:docPr id="{uuid.uuid4().int % 100000}" name="SealImage"/>
+                <wp:docPr id="{doc_pr_id}" name="SealImage_{doc_pr_id}"/>
                 <wp:cNvGraphicFramePr/>
                 <a:graphic>
                   <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
                     <pic:pic>
                       <pic:nvPicPr>
-                        <pic:cNvPr id="0" name="Seal.png"/>
+                        <pic:cNvPr id="{doc_pr_id}" name="Seal.png"/>
                         <pic:cNvPicPr/>
                       </pic:nvPicPr>
                       <pic:blipFill>
@@ -174,6 +189,8 @@ class DocxService:
         return xml
 
     def generate_docx(self, translated_data: dict) -> dict:
+        self._id_counter = 1  # 重置 ID 计数器
+        
         image_size = translated_data.get("image_size", {})
         blocks = translated_data.get("blocks", [])
 
@@ -200,7 +217,7 @@ class DocxService:
         section.left_margin = Inches(0)
         section.right_margin = Inches(0)
 
-        # 1. 绘制 [Photo] 照片占位框 (左上方)
+        # 1. 绘制 [Photo] 照片占位框
         photo_xml = self._create_textbox_xml(
             text="Photo",
             left_in=1.0,
@@ -209,11 +226,12 @@ class DocxService:
             height_in=1.7,
             font_size_pt=11.0,
             show_border=True,
-            align_center=True
+            align_center=True,
+            doc_pr_id=self._get_next_id()
         )
         self._append_to_body(doc, photo_xml)
 
-        # 2. 填充正文所有识别并翻译的文本块
+        # 2. 填充正文文本块
         count = 0
         for block in blocks:
             en_text = block.get("en_text", "").strip()
@@ -258,14 +276,15 @@ class DocxService:
                 top_in=top_in,
                 width_in=width_in,
                 height_in=height_in,
-                font_size_pt=font_size_pt
+                font_size_pt=font_size_pt,
+                doc_pr_id=self._get_next_id()
             )
             self._append_to_body(doc, xml_str)
             count += 1
 
-        # 3. 绘制底部公证落款 (分割线 + 声明文字)
+        # 3. 绘制底部公证落款
         footer_top_in = page_h_in - 1.8
-        
+        line_id = self._get_next_id()
         line_xml = f'''
         <w:p {ALL_NAMESPACES}>
           <w:r>
@@ -281,7 +300,7 @@ class DocxService:
                 <wp:extent cx="{int((page_w_in - 1.0) * 914400)}" cy="12700"/>
                 <wp:effectExtent l="0" t="0" r="0" b="0"/>
                 <wp:wrapNone/>
-                <wp:docPr id="{uuid.uuid4().int % 100000}" name="LineShape"/>
+                <wp:docPr id="{line_id}" name="LineShape_{line_id}"/>
                 <wp:cNvGraphicFramePr/>
                 <a:graphic>
                   <a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
@@ -327,21 +346,26 @@ class DocxService:
             top_in=footer_top_in + 0.08,
             width_in=page_w_in - 1.0,
             height_in=1.6,
-            font_size_pt=8.5
+            font_size_pt=8.5,
+            doc_pr_id=self._get_next_id()
         )
         self._append_to_body(doc, footer_text_xml)
 
-        # 4. 浮动压盖印章图片
+        # 4. 安全加载并插入印章
         if self.seal_path.exists():
-            rId, _ = doc.part.get_or_add_image(str(self.seal_path))
-            seal_xml = self._create_floating_image_xml(
-                rId=rId,
-                left_in=page_w_in - 4.2,
-                top_in=footer_top_in + 0.1,
-                width_in=1.8,
-                height_in=1.5
-            )
-            self._append_to_body(doc, seal_xml)
+            try:
+                rId, _ = doc.part.get_or_add_image(str(self.seal_path))
+                seal_xml = self._create_floating_image_xml(
+                    rId=rId,
+                    left_in=page_w_in - 4.2,
+                    top_in=footer_top_in + 0.1,
+                    width_in=1.8,
+                    height_in=1.5,
+                    doc_pr_id=self._get_next_id()
+                )
+                self._append_to_body(doc, seal_xml)
+            except Exception as e:
+                print(f"Warning: Failed to append seal image: {e}")
 
         # 5. 保存文档
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
