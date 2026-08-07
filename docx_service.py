@@ -41,11 +41,9 @@ class DocxService:
         return cleaned
 
     def _append_to_body(self, doc: Document, xml_str: str):
-        """💡 安全注入底层：带自动容错清理的 XML 解析引擎"""
         try:
             element = parse_xml(xml_str)
         except Exception:
-            # 若含有未预料的杂质标签导致 parse_xml 异常，自动剥离全部 HTML 标签进行二次降级解析，确保 100% 成功
             sanitized_xml = re.sub(r'</?(?!w:|v:|o:)[^>]+>', '', xml_str)
             element = parse_xml(sanitized_xml)
 
@@ -56,21 +54,12 @@ class DocxService:
             doc.element.body.append(element)
 
     def _parse_inline_runs_xml(self, line_text: str, font_size_pt: float, base_is_bold: bool = False) -> str:
-        """
-        💡 强力防爆行内渲染引擎：
-        1. 剥离除 <b> 和 </b> 之外的所有非安全 HTML 标签；
-        2. 规范化 <b>...</b> 标签分割；
-        3. 对所有文字片段进行 html.escape 强制转义，杜绝破坏 Word XML 结构。
-        """
         if not line_text:
             return ""
 
         clean_line = self._clean_text(line_text)
-        
-        # 1. 精准清洗除了 <b> 和 </b> 以外的所有 HTML/XML 杂质
         clean_line = re.sub(r'<(?!/?b\b)[^>]*>', '', clean_line, flags=re.IGNORECASE)
 
-        # 2. 补齐可能未闭合的 <b> 标签
         b_open_count = len(re.findall(r'<b>', clean_line, flags=re.IGNORECASE))
         b_close_count = len(re.findall(r'</b>', clean_line, flags=re.IGNORECASE))
         if b_open_count > b_close_count:
@@ -160,7 +149,7 @@ class DocxService:
             f'<v:textbox inset="0pt,0pt,0pt,0pt">'
             f'<w:txbxContent>{txbx_content}</w:txbxContent>'
             f'</v:textbox>'
-            f'</v:shape>'
+            f'</w:shape>'
             f'</w:pict>'
             f'</w:r>'
             f'</w:p>'
@@ -244,7 +233,7 @@ class DocxService:
 
         footer_top_in = page_h_in - 1.8
 
-        # 1. 左半区设置 (居中轴 X = 2.4 英寸)
+        # 1. 左半区照片框 (居中轴 X = 2.4 英寸)
         left_area_width = 4.0
         left_area_x = 0.4
         left_center_x = left_area_x + (left_area_width / 2.0)
@@ -326,16 +315,15 @@ class DocxService:
             left_y += h_in + 0.12
             count += 1
 
-        # ==================== B. 右半区美化渲染（精确定位与防重叠） ====================
+        # ==================== B. 右半区美化渲染 ====================
         right_area_x = 5.2
-        right_area_w = 5.0  # 💡精准宽度：5.0 英寸，右侧留白美观
-        right_y = 0.8       # 顶端 Y 轴起始位置
+        right_area_w = 5.0
+        right_y = 0.8
 
         for b in right_blocks:
             text = b["en_text"]
             t_lower = text.lower()
             
-            # 💡 精确分类（优先拆分 Main 与 Principal，避免误判重叠）
             is_main_keywords = any(k in t_lower for k in ["student of", "having completed", "hereby granted", "hereby awarded", "completed senior", "born on", "native of", "satisfactory academic", "satisfactory results"])
             is_main = is_main_keywords or (len(text) > 70 and not "principal" in t_lower)
             
@@ -371,7 +359,6 @@ class DocxService:
                 font_sz = 13.5
                 bold = False
                 h_in = 0.4
-                # 💡 彻底防重叠：校长签名永远在正文下方（最小 Top 4.10 英寸），绝对不重合
                 top_pos = max(right_y, 4.10)
                 right_y = top_pos + h_in + 0.25
                 xml = self._create_textbox_vml(text, right_area_x, top_pos, right_area_w, h_in, font_size_pt=font_sz, is_bold=bold)
