@@ -93,12 +93,12 @@ class DocxService:
             section.page_width = Inches(8.27)
             section.page_height = Inches(11.69)
 
-        # 💡 精确页面边距，确保单页完整容纳
-        section.top_margin = Inches(0.4)
-        section.bottom_margin = Inches(1.6)
-        section.left_margin = Inches(0.5)
-        section.right_margin = Inches(0.5)
-        section.footer_distance = Inches(0.3)
+        # 💡【沉降优化 1】：适度加大 top_margin，让主体整体向下平移
+        section.top_margin = Inches(0.8)
+        section.bottom_margin = Inches(1.8)
+        section.left_margin = Inches(0.6)
+        section.right_margin = Inches(0.6)
+        section.footer_distance = Inches(0.4)
 
         left_blocks = []
         raw_right_blocks = []
@@ -111,7 +111,6 @@ class DocxService:
             if not en_text:
                 continue
 
-            # 💡 核心过滤：彻底拦截泄露的原始中文碎片！
             if self._is_chinese(en_text):
                 continue
 
@@ -146,7 +145,7 @@ class DocxService:
 
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
 
-        # 精准右栏映射
+        # 右栏分类
         title_block = None
         main_block = None
         principal_block = None
@@ -196,35 +195,36 @@ class DocxService:
         cell_left = main_table.cell(0, 0)
         cell_right = main_table.cell(0, 1)
 
-        # ==================== A. 左半区渲染 ====================
+        # ==================== A. 左半区渲染 (视觉居中调校) ====================
         photo_table = cell_left.add_table(rows=1, cols=1)
         photo_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         photo_cell = photo_table.cell(0, 0)
-        photo_cell.width = Inches(1.2)
+        photo_cell.width = Inches(1.25)
         
         p_photo = photo_cell.paragraphs[0]
         p_photo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p_photo.paragraph_format.space_before = Pt(12)
-        p_photo.paragraph_format.space_after = Pt(8)
+        # 💡【沉降优化 2】：照片顶部增加留白 Pt(36)，与右侧标题对齐下移
+        p_photo.paragraph_format.space_before = Pt(36)
+        p_photo.paragraph_format.space_after = Pt(14)
         
         run_photo = p_photo.add_run("Photo")
         run_photo.font.name = "Times New Roman"
-        run_photo.font.size = Pt(10.5)
+        run_photo.font.size = Pt(11)
 
         for b in left_blocks:
             text = b["en_text"]
             p = cell_left.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            p.paragraph_format.space_before = Pt(4)
-            p.paragraph_format.space_after = Pt(4)
+            p.paragraph_format.space_before = Pt(6)
+            p.paragraph_format.space_after = Pt(6)
 
             t_lower = text.lower()
             is_small = text.startswith("(") or "seal" in t_lower or "not reissued" in t_lower
-            font_sz = 9.0 if is_small else 10.5
+            font_sz = 9.5 if is_small else 11.0
 
             self._add_formatted_runs(p, text, default_font_size=font_sz)
 
-        # ==================== B. 右半区紧凑排版 ====================
+        # ==================== B. 右半区渲染 (呼吸感下移调校) ====================
         p_right_first = cell_right.paragraphs[0]
         first_right = True
 
@@ -240,37 +240,38 @@ class DocxService:
 
             if b_type == "title":
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                p.paragraph_format.space_before = Pt(12)
-                p.paragraph_format.space_after = Pt(16)
-                self._add_formatted_runs(p, text, default_font_size=15.0, default_bold=True)
+                # 💡【沉降优化 3】：标题顶部 Pt(36)，下方留白 Pt(24)
+                p.paragraph_format.space_before = Pt(36)
+                p.paragraph_format.space_after = Pt(24)
+                self._add_formatted_runs(p, text, default_font_size=16.0, default_bold=True)
             elif b_type == "main":
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(6)
-                p.paragraph_format.space_after = Pt(16)
-                p.paragraph_format.line_spacing = 1.3
-                self._add_formatted_runs(p, text, default_font_size=12.5, default_bold=False)
+                p.paragraph_format.space_before = Pt(10)
+                p.paragraph_format.space_after = Pt(28)
+                p.paragraph_format.line_spacing = 1.4  # 提升行间距，填补垂直空间
+                self._add_formatted_runs(p, text, default_font_size=13.0, default_bold=False)
             elif b_type == "principal":
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(12)
-                p.paragraph_format.space_after = Pt(10)
-                self._add_formatted_runs(p, text, default_font_size=12.5, default_bold=False)
+                p.paragraph_format.space_before = Pt(24)
+                p.paragraph_format.space_after = Pt(18)
+                self._add_formatted_runs(p, text, default_font_size=13.0, default_bold=False)
             elif b_type == "date":
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                p.paragraph_format.space_before = Pt(10)
-                p.paragraph_format.space_after = Pt(6)
-                self._add_formatted_runs(p, text, default_font_size=12.0, default_bold=False)
+                p.paragraph_format.space_before = Pt(18)
+                p.paragraph_format.space_after = Pt(12)
+                self._add_formatted_runs(p, text, default_font_size=12.5, default_bold=False)
             else:
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER if "seal" in text.lower() else WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(3)
-                p.paragraph_format.space_after = Pt(3)
-                self._add_formatted_runs(p, text, default_font_size=9.5, default_bold=False)
+                p.paragraph_format.space_before = Pt(4)
+                p.paragraph_format.space_after = Pt(4)
+                self._add_formatted_runs(p, text, default_font_size=10.0, default_bold=False)
 
-        # ==================== C. 绝对单页固定页脚 ====================
+        # ==================== C. 原生页脚挂载 (置底锁定) ====================
         footer = section.footer
         
         p_line = footer.paragraphs[0]
         p_line.paragraph_format.space_before = Pt(0)
-        p_line.paragraph_format.space_after = Pt(4)
+        p_line.paragraph_format.space_after = Pt(6)
 
         pBdr_xml = (
             f'<w:pBdr {nsdecls("w")}>'
@@ -290,7 +291,7 @@ class DocxService:
         cell_seal.width = Inches(3.0)
 
         p_decl = cell_decl.paragraphs[0]
-        p_decl.paragraph_format.line_spacing = 1.10
+        p_decl.paragraph_format.line_spacing = 1.12
         p_decl.paragraph_format.space_before = Pt(0)
         p_decl.paragraph_format.space_after = Pt(0)
 
@@ -308,7 +309,7 @@ class DocxService:
         for line in footer_text.split('\n'):
             r = p_decl.add_run(line + "\n")
             r.font.name = "Times New Roman"
-            r.font.size = Pt(8.0)
+            r.font.size = Pt(8.5)
             r.font.color.rgb = RGBColor(0, 0, 0)
 
         p_seal = cell_seal.paragraphs[0]
@@ -319,7 +320,7 @@ class DocxService:
         seal_file = self._find_seal_file()
         if seal_file:
             try:
-                p_seal.add_run().add_picture(str(seal_file), width=Inches(1.6))
+                p_seal.add_run().add_picture(str(seal_file), width=Inches(1.65))
             except Exception as e:
                 print(f"Warning: Failed to add seal picture to footer: {e}")
 
