@@ -5,6 +5,13 @@ import zipfile
 from pathlib import Path
 import streamlit as st
 
+# 尝试导入 rarfile 库
+try:
+    import rarfile
+    HAS_RAR = True
+except ImportError:
+    HAS_RAR = False
+
 # 导入自定义服务模块
 import config
 from ocr_service import ocr_service
@@ -13,7 +20,7 @@ from docx_service import docx_service
 
 # 1. 页面基本配置
 st.set_page_config(
-    page_title="毕业证书智能公证翻译系统 (支持批量)",
+    page_title="毕业证书智能公证翻译系统 (支持 ZIP/RAR 批量)",
     page_icon="📜",
     layout="wide"
 )
@@ -21,9 +28,9 @@ st.set_page_config(
 # 2. 主界面标题与说明
 st.title("📜 毕业证书智能公证翻译系统")
 st.markdown("""
-本系统已支持 **单张图片处理** 与 **ZIP 压缩包批量翻译打包**：
+本系统已支持 **单张图片处理** 与 **ZIP/RAR 压缩包批量翻译打包**：
 * 👁️ **视觉看图**：通义千问 (Qwen-VL-Max) 识别红色环形印章与草书签名；
-* 📦 **批量打包**：支持直接上传 `.zip` 压缩包，自动批量翻译并打包导出 `.docx` 压缩包；
+* 📦 **批量打包**：支持上传 `.zip` 或 `.rar` 压缩包，自动批量翻译并打包导出；
 * 📐 **防重叠排版**：100% 遵守国际公证规范与 Times New Roman 格式排版。
 """)
 
@@ -49,40 +56,53 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### 💡 批量处理提示")
     st.markdown("""
-    * **压缩包格式**：请上传普通 `.zip` 格式；
-    * **图片格式**：压缩包内支持 JPG、JPEG、PNG 图片；
-    * **文件名建议**：压缩包内图片建议命名为学生姓名（如 `牛雯_毕业证.jpg`），生成的 Word 文件名会与之对应。
+    * **压缩包格式**：支持普通 `.zip` 和 `.rar` 格式；
+    * **图片格式**：支持压缩包内的 JPG、JPEG、PNG 图片；
+    * **命名规则**：建议将压缩包内图片命名为学生姓名（如 `牛雯_毕业证.jpg`），生成的 Word 会自动保持对应。
     """)
 
-# 4. 文件上传区（同时支持图片与 ZIP）
+# 4. 文件上传区（同时支持单图、ZIP 和 RAR）
 uploaded_file = st.file_uploader(
-    "请选择要翻译的证书（支持单张 JPG/PNG，或包含多张图片的 ZIP 压缩包）", 
-    type=["png", "jpg", "jpeg", "zip"]
+    "请选择要翻译的证书（支持单张 JPG/PNG，或包含多张图片的 ZIP/RAR 压缩包）", 
+    type=["png", "jpg", "jpeg", "zip", "rar"]
 )
 
 if uploaded_file is not None:
-    is_zip = uploaded_file.name.lower().endswith(".zip")
+    filename_lower = uploaded_file.name.lower()
+    is_zip = filename_lower.endswith(".zip")
+    is_rar = filename_lower.endswith(".rar")
 
-    if is_zip:
-        # ==================== 📦 ZIP 批量处理模式 ====================
+    if is_zip or is_rar:
+        # ==================== 📦 压缩包批量处理模式 ====================
         st.subheader("📦 批量处理模式")
         st.info(f"已检测到压缩包文件：`{uploaded_file.name}`，准备进行批量识别与翻译。")
 
         if st.button("🚀 开始批量翻译与打包", type="primary", use_container_width=True):
-            # 创建临时工作目录
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp_dir_path = Path(tmp_dir)
-                zip_path = tmp_dir_path / uploaded_file.name
+                archive_path = tmp_dir_path / uploaded_file.name
                 
-                # 1. 保存上传的 ZIP
-                with open(zip_path, "wb") as f:
+                # 1. 保存上传的压缩文件
+                with open(archive_path, "wb") as f:
                     f.write(uploaded_file.getvalue())
 
-                # 2. 解压文件
+                # 2. 解压文件 (自动识别 ZIP 或 RAR)
                 extract_dir = tmp_dir_path / "extracted"
                 os.makedirs(extract_dir, exist_ok=True)
-                with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                    zip_ref.extractall(extract_dir)
+
+                try:
+                    if is_zip:
+                        with zipfile.ZipFile(archive_path, "r") as zip_ref:
+                            zip_ref.extractall(extract_dir)
+                    elif is_rar:
+                        if not HAS_RAR:
+                            st.error("❌ 环境缺失 rarfile 依赖，请确认已在 requirements.txt 中配置 rarfile。")
+                            st.stop()
+                        with rarfile.RarFile(archive_path, "r") as rar_ref:
+                            rar_ref.extractall(extract_dir)
+                except Exception as e:
+                    st.error(f"❌ 解压压缩包失败，请检查压缩文件是否损坏，报错信息: {str(e)}")
+                    st.stop()
 
                 # 3. 筛选有效图片文件
                 valid_extensions = {".jpg", ".jpeg", ".png"}
@@ -109,22 +129,16 @@ if uploaded_file is not None:
                         status_text.markdown(f"⏳ **正在处理 ({idx + 1}/{total_count}):** `{img_path.name}`...")
 
                         try:
-                            # 步骤 A: OCR
                             ocr_data = ocr_service.recognize(str(img_path))
-                            
-                            # 步骤 B: 视觉看图翻译
                             translated_data = translate_service.translate_ocr_blocks(
                                 ocr_data, 
                                 image_input=str(img_path)
                             )
-                            
-                            # 步骤 C: 生成 DOCX
                             result = docx_service.generate_docx(translated_data)
                             generated_filename = result.get("filename")
                             docx_file_path = config.OUTPUT_DIR / generated_filename
 
                             if docx_file_path.exists():
-                                # 为便于识别，给 DOCX 重命名附加原图前缀
                                 custom_docx_name = f"Translated_{img_path.stem}.docx"
                                 target_path = tmp_dir_path / custom_docx_name
                                 shutil.copy(docx_file_path, target_path)
@@ -135,21 +149,20 @@ if uploaded_file is not None:
 
                     status_text.markdown("✅ **所有图片处理完毕，正在打成导出压缩包...**")
 
-                    # 5. 将所有生成成功的 Word 文件打包为新的 ZIP
+                    # 5. 打包导出
                     if generated_docx_files:
                         output_zip_path = tmp_dir_path / "translated_certificates_all.zip"
                         with zipfile.ZipFile(output_zip_path, "w", zipfile.ZIP_DEFLATED) as out_zip:
                             for docx_file in generated_docx_files:
                                 out_zip.write(docx_file, arcname=docx_file.name)
 
-                        # 读取压缩包供用户下载
                         with open(output_zip_path, "rb") as f:
                             zip_bytes = f.read()
 
                         st.success(f"🎉 批量翻译成功完成！共生成 **{len(generated_docx_files)}** 份 Word 公证书。")
                         
                         st.download_button(
-                            label=f"📥 立即下载批量翻译结果压缩包 (translated_certificates_all.zip)",
+                            label="📥 立即下载批量翻译结果压缩包 (translated_certificates_all.zip)",
                             data=zip_bytes,
                             file_name="translated_certificates_all.zip",
                             mime="application/zip",
@@ -157,7 +170,7 @@ if uploaded_file is not None:
                             use_container_width=True
                         )
                     else:
-                        st.error("❌ 未能成功生成任何 Word 文档，请检查日志。")
+                        st.error("❌ 未能成功生成任何 Word 文档。")
 
     else:
         # ==================== 📷 单张图片处理模式 ====================
@@ -219,4 +232,4 @@ if uploaded_file is not None:
                         except Exception:
                             pass
 else:
-    st.info("👈 请在上方选择并上传需要翻译的证书图片或 ZIP 压缩包。")
+    st.info("👈 请在上方选择并上传需要翻译的证书图片或 ZIP/RAR 压缩包。")
