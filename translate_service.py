@@ -65,35 +65,37 @@ class TranslationService:
 
         input_json_str = json.dumps(input_blocks, ensure_ascii=False, indent=2)
 
-        # 💡 核心转义修复：用 {{ }} 保护提示词里的 JSON 格式示例
         prompt_text = f"""你是一名精通中国官方毕业证书/学位证书公证翻译的视觉大模型专家。
 附件是一张毕业证书的原图，下方是从该图片中初步提取到的文本块 JSON 数组：
 
 {input_json_str}
 
-【核心任务】：
-请结合原图和文本块，对毕业证书进行完整的英文公证翻译与结构化整合：
-1. 证书标题：翻译为 "Graduation Certificate" 或 "Jiangsu Province High School Graduation Certificate"。
-2. 毕业正文长句（核心！）：将关于学生姓名、性别、出生年月、入学毕业时间、修业期满、成绩合格、准予毕业的所有文字，【100% 完整合成为一条连贯的英文公证长句】！
-   示例："Student Niu Wen, female, born on October 12, 2006, aged 18, having completed the three-year senior high school program at this school from September 2022 to June 2025, with satisfactory academic performance, is hereby awarded graduation."
-3. 学校公章：仔细识别红色圆章弧形字迹（如“江浦高级中学文昌校区”），输出 `(Official Seal of Jiangpu Senior High School, Wenchang Campus)`。
-4. 校长签名：仔细识别草书签名字迹（如“薄治中”），输出 `Principal: Bo Zhizhong (Signature)`。
-5. 发证日期：翻译为 `Date of Issue: June 2025`。
-6. 左半页信息：学籍号(`Student ID:...`)、毕证字号(`Diploma No.:...`)、发证编号(`Certificate No.:...`)、钢印标注(`(School embossed seal)`)等。
+【核心任务与关键信息加粗规范】：
+请结合原图和文本块进行公证翻译。请务必使用 `<b>...</b>` 标签将右侧正文中的【所有关键实体信息】进行包裹加粗（与官方翻译件标准一致）：
+
+1. 证书标题：翻译为 "Graduation Diploma" 或 "Graduation Certificate"。
+2. 毕业正文长句（核心！）：
+   - 将学生姓名、籍贯城市/省份、性别、出生年月、入学/毕业时间、修业年限等关键要素【100% 完整合成一条长句】，并【用 <b> 标签加粗关键信息】！
+   - 示例："The student of <b>Cao Shuo</b>, native of <b>Nantong</b> City, <b>Jiangsu</b> province, <b>male</b>, born on <b>Dec. 2007</b>, has studied in our school here from <b>Sept. 2023</b> to <b>June 2026</b> and completed senior school courses (three years) with satisfactory results and is hereby granted graduation."
+3. 关键机构与人员加粗：
+   - 校长签名：`Principal: <b>Zhang Lihua</b> (Signature seal)` 或 `Principal: (Signature seal)`。
+   - 毕业学校/钢印：`Graduation School: <b>Nantong No.2 Middle School</b>`，`Raised seal of <b>Nantong No.2 Middle School</b>`。
+   - 发证日期：`<b>June 30, 2026</b>`。
+4. 左半页信息：学籍号(`Student Registration Number: ...`)、毕证字号(`Graduation Certificate Number: ...`)、验印说明、"Not Reissued if Lost" 等。
 
 【位置 left 设定】：
 - 左半页元素：bbox_rel.left 设为 0.08。
-- 右半页元素（标题、正文段落、学校公章、校长签名、发证日期）：bbox_rel.left 设为 0.52。
+- 右半页元素：bbox_rel.left 设为 0.52。
 
 【输出要求】：
-必须直接返回一个标准的 JSON 数组，格式形如：
+直接返回标准的 JSON 数组，格式形如：
 [
   {{
-    "en_text": "Student Niu Wen...",
+    "en_text": "The student of <b>Cao Shuo</b>...",
     "bbox_rel": {{"left": 0.52, "top": 0.2}}
   }}
 ]
-严禁使用 Markdown 代码块，保证输出可以直接被 json.loads 解析！
+严禁 Markdown 代码块，确保可以直接被 json.loads 解析！
 """
 
         try:
@@ -110,7 +112,7 @@ class TranslationService:
                 })
 
             messages = [
-                {"role": "system", "content": "你是一个严格返回标准 JSON 数组格式的专业证书视觉公证翻译助手。"},
+                {"role": "system", "content": "你是一个严格返回标准 JSON 数组格式且懂得精准局部 HTML 加粗的专业公证翻译助手。"},
                 {"role": "user", "content": content_list}
             ]
 
