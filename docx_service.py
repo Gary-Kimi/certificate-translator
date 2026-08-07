@@ -59,8 +59,10 @@ class DocxService:
         font_size_pt: float = 12.0,
         is_bold: bool = False,
         show_border: bool = False,
-        align_center: bool = False
+        align_center: bool = False,
+        align_right: bool = False
     ) -> str:
+        """支持左对齐、居中、右对齐的 VML 绝对定位文本框"""
         left_pt = left_in * 72.0
         top_pt = top_in * 72.0
         width_pt = width_in * 72.0
@@ -68,7 +70,14 @@ class DocxService:
 
         safe_text = self._clean_text(text)
         stroked = "t" if show_border else "f"
-        align_xml = '<w:jc w:val="center"/>' if align_center else ''
+        
+        if align_center:
+            align_xml = '<w:jc w:val="center"/>'
+        elif align_right:
+            align_xml = '<w:jc w:val="right"/>'
+        else:
+            align_xml = ''
+
         bold_xml = '<w:b/>' if is_bold else ''
 
         lines = safe_text.split('\n')
@@ -183,7 +192,6 @@ class DocxService:
         section.right_margin = Inches(0)
 
         footer_top_in = page_h_in - 1.8
-        max_content_bottom_in = footer_top_in - 0.25
 
         # 1. 绘制 Photo 照片框
         photo_xml = self._create_textbox_vml(
@@ -216,6 +224,8 @@ class DocxService:
             is_right_keyword = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation"])
             is_right_half = (rel_left >= 0.42) or is_right_keyword
 
+            align_right = False
+
             if is_right_half:
                 # ================= 右半页 =================
                 if is_title:
@@ -226,19 +236,23 @@ class DocxService:
                     width_in = page_w_in - left_in - 0.5
                     height_in = 0.5
                 elif "principal" in en_lower:
+                    # 💡【校长签名：强制延伸至右边距，并设为右对齐】
                     font_size_pt = 14.0
                     is_bold = False
-                    left_in = 5.5
+                    left_in = 5.2
                     top_in = 4.1
-                    width_in = 5.0
+                    width_in = page_w_in - left_in - 0.5  # 延伸到右侧边缘 (11.19 英寸)
                     height_in = 0.4
+                    align_right = True
                 elif any(m in en_lower for m in ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]) and len(en_text) < 25:
+                    # 💡【发证日期：强制延伸至右边距，并设为右对齐】
                     font_size_pt = 14.0
                     is_bold = False
-                    left_in = 6.8
-                    top_in = 4.8
-                    width_in = 3.5
+                    left_in = 5.2
+                    top_in = 4.7
+                    width_in = page_w_in - left_in - 0.5  # 延伸到右侧边缘 (11.19 英寸)
                     height_in = 0.4
+                    align_right = True
                 else:
                     # 核心段落：Times New Roman 四号 (14pt)
                     font_size_pt = 14.0
@@ -256,18 +270,15 @@ class DocxService:
                 is_seal_or_id = en_text.startswith("(") or any(k in en_lower for k in ["seal of", "student id", "certificate no"])
                 
                 if is_seal_or_id:
-                    font_size_pt = 9.5  # 标准公证注释字号
+                    font_size_pt = 9.5
                 else:
-                    font_size_pt = 11.5 # 左侧小四字号
+                    font_size_pt = 11.5
                 is_bold = False
 
-                left_in = 0.35  # 统一左边距
-                
-                # 💡 核心保护：给足 4.2 英寸宽度，保证 (Official Seal of...) 100% 保持在 1 行内！
+                left_in = 0.35
                 width_in = 4.2
                 height_in = 0.35
 
-                # 垂直方向均匀铺开
                 if "education administrative" in en_lower:
                     top_in = 2.5
                 elif "student id" in en_lower:
@@ -286,7 +297,8 @@ class DocxService:
                 width_in=width_in,
                 height_in=height_in,
                 font_size_pt=font_size_pt,
-                is_bold=is_bold
+                is_bold=is_bold,
+                align_right=align_right
             )
             self._append_to_body(doc, xml_str)
             count += 1
