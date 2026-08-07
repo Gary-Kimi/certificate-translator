@@ -16,7 +16,6 @@ class DocxService:
         self._id_counter = 1
 
     def _find_seal_file(self) -> Path:
-        """大小写模糊寻找印章图片 (适应 Linux 环境)"""
         possible_names = ["seal.png", "Seal.png", "SEAL.PNG", "seal.PNG"]
         search_dirs = [Path("."), Path(__file__).resolve().parent]
         for d in search_dirs:
@@ -37,7 +36,6 @@ class DocxService:
         return html.escape(cleaned)
 
     def _append_to_body(self, doc: Document, xml_str: str):
-        """确保元素插入在分节符 (sectPr) 之前，防止被 Word 忽略"""
         element = parse_xml(xml_str)
         sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
         if sectPr is not None:
@@ -57,7 +55,6 @@ class DocxService:
         show_border: bool = False,
         align_center: bool = False
     ) -> str:
-        """标准 VML 文本框（显式声明 xmlns:w 和 xmlns:v，绝对不报错）"""
         left_pt = left_in * 72.0
         top_pt = top_in * 72.0
         width_pt = width_in * 72.0
@@ -107,7 +104,6 @@ class DocxService:
         return xml
 
     def _create_line_vml(self, left_in: float, top_in: float, width_in: float) -> str:
-        """标准 VML 长分割线"""
         left_pt = left_in * 72.0
         top_pt = top_in * 72.0
         right_pt = (left_in + width_in) * 72.0
@@ -128,7 +124,6 @@ class DocxService:
         return xml
 
     def _create_floating_image_vml(self, rId: str, left_in: float, top_in: float, width_in: float, height_in: float) -> str:
-        """标准 VML 浮动公章图片"""
         left_pt = left_in * 72.0
         top_pt = top_in * 72.0
         width_pt = width_in * 72.0
@@ -183,7 +178,11 @@ class DocxService:
         footer_top_in = page_h_in - 1.8
         max_content_bottom_in = footer_top_in - 0.25
 
-        # 1. 绘制 Photo 照片框（位于左侧文字正上方，X=2.1, Y=0.6）
+        # 核心版面中缝界线设置
+        left_column_max_x = page_w_in * 0.40   # 左半页最大右边界 (约 4.67 英寸)
+        right_column_min_x = page_w_in * 0.45  # 右半页最小左起点 (约 5.26 英寸)
+
+        # 1. 绘制 Photo 照片框
         photo_xml = self._create_textbox_vml(
             text="Photo",
             left_in=2.1,
@@ -196,7 +195,7 @@ class DocxService:
         )
         self._append_to_body(doc, photo_xml)
 
-        # 2. 填充正文（左半页：Times New Roman 小四 12pt / 右半页：Times New Roman 四号 14pt）
+        # 2. 填充正文文本块（强行设立左右半页物理屏障）
         count = 0
         min_top_in = 0.5
         usable_height_in = max_content_bottom_in - min_top_in
@@ -212,32 +211,39 @@ class DocxService:
             rel_w = bbox_rel.get("width", 0.1)
             rel_h = bbox_rel.get("height", 0.03)
 
-            left_in = rel_left * page_w_in
-            top_in = min_top_in + (rel_top * usable_height_in * 0.85)
-
             char_count = len(en_text)
-
             is_title = any(k in en_text.lower() for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
-            is_right_half = rel_left >= 0.45
+            is_right_half = rel_left >= 0.42  # 阈值判断属于左半页还是右半页
 
-            if is_title:
-                font_size_pt = 16.0
-                is_bold = True
-            elif is_right_half:
-                font_size_pt = 14.0  # 右半页：四号 (14pt)
-                is_bold = False
+            if is_right_half:
+                # --- 右半页处理规则 ---
+                font_size_pt = 16.0 if is_title else 14.0  # 右侧四号 (14pt)
+                is_bold = is_title
+                
+                # 强制起点必须在右侧安全线以右
+                left_in = max(rel_left * page_w_in, right_column_min_x)
+                top_in = min_top_in + (rel_top * usable_height_in * 0.85)
+
+                needed_w_in = char_count * (font_size_pt * 0.0068)
+                max_allowed_w = page_w_in - left_in - 0.4
+                width_in = min(max(rel_w * page_w_in * 1.2, needed_w_in), max_allowed_w)
+                width_in = max(1.5, width_in)
+
             else:
-                font_size_pt = 12.0  # 左半页：小四 (12pt)
+                # --- 左半页处理规则 ---
+                font_size_pt = 11.5  # 左侧小四 (11.5-12pt)
                 is_bold = False
 
-            needed_w_in = char_count * (font_size_pt * 0.0068)
-            width_in = max(rel_w * page_w_in * 1.3, needed_w_in)
-            
-            max_allowed_w = page_w_in - left_in - 0.2
-            if max_allowed_w > 0.8:
-                width_in = min(width_in, max_allowed_w)
-            width_in = max(1.0, width_in)
+                left_in = rel_left * page_w_in
+                top_in = min_top_in + (rel_top * usable_height_in * 0.85)
 
+                # 💡 核心限制：左侧文本的宽度绝对不能跨越 left_column_max_x 屏障！
+                max_allowed_w = max(1.0, left_column_max_x - left_in)
+                needed_w_in = char_count * (font_size_pt * 0.0065)
+                width_in = min(needed_w_in, max_allowed_w)
+                width_in = max(1.0, width_in)
+
+            # 计算高度（如果字太长，在受限的宽度内自动向下多行折行）
             chars_per_line = max(10, int((width_in * 72) / (font_size_pt * 0.55)))
             estimated_lines = math.ceil(char_count / chars_per_line)
             single_line_h_in = (font_size_pt / 72.0) * 1.4
