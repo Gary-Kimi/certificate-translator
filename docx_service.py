@@ -8,6 +8,7 @@ from docx import Document
 from docx.shared import Inches
 from docx.enum.section import WD_ORIENT
 from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
 import config
 
 class DocxService:
@@ -38,7 +39,7 @@ class DocxService:
 
     def _append_to_body(self, doc: Document, xml_str: str):
         element = parse_xml(xml_str)
-        sectPr = doc.element.body.find('{[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)}sectPr')
+        sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
         if sectPr is not None:
             sectPr.addprevious(element)
         else:
@@ -86,9 +87,7 @@ class DocxService:
         txbx_content = "".join(p_runs)
         doc_id = self._get_next_id()
 
-        xml = f'''
-        <w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
-             xmlns:v="urn:schemas-microsoft-com:vml">
+        xml = f'''<w:p {nsdecls("w", "v")}>
           <w:r>
             <w:pict>
               <v:shape id="box_{doc_id}" type="#_x0000_t202"
@@ -102,8 +101,7 @@ class DocxService:
               </v:shape>
             </w:pict>
           </w:r>
-        </w:p>
-        '''
+        </w:p>'''
         return xml
 
     def _create_line_vml(self, left_in: float, top_in: float, width_in: float) -> str:
@@ -112,9 +110,7 @@ class DocxService:
         right_pt = (left_in + width_in) * 72.0
         doc_id = self._get_next_id()
 
-        xml = f'''
-        <w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
-             xmlns:v="urn:schemas-microsoft-com:vml">
+        xml = f'''<w:p {nsdecls("w", "v")}>
           <w:r>
             <w:pict>
               <v:line id="line_{doc_id}"
@@ -124,8 +120,7 @@ class DocxService:
                       strokecolor="#000000" strokeweight="1.2pt"/>
             </w:pict>
           </w:r>
-        </w:p>
-        '''
+        </w:p>'''
         return xml
 
     def _create_floating_image_vml(self, rId: str, left_in: float, top_in: float, width_in: float, height_in: float) -> str:
@@ -135,11 +130,7 @@ class DocxService:
         height_pt = height_in * 72.0
         doc_id = self._get_next_id()
 
-        xml = f'''
-        <w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
-             xmlns:v="urn:schemas-microsoft-com:vml"
-             xmlns:o="urn:schemas-microsoft-com:office:office"
-             xmlns:r="[http://schemas.openxmlformats.org/officeDocument/2006/relationships](http://schemas.openxmlformats.org/officeDocument/2006/relationships)">
+        xml = f'''<w:p {nsdecls("w", "v", "o", "r")}>
           <w:r>
             <w:pict>
               <v:shape id="seal_{doc_id}" type="#_x0000_t75"
@@ -149,8 +140,7 @@ class DocxService:
               </v:shape>
             </w:pict>
           </w:r>
-        </w:p>
-        '''
+        </w:p>'''
         return xml
 
     def generate_docx(self, translated_data: dict) -> dict:
@@ -198,7 +188,7 @@ class DocxService:
         )
         self._append_to_body(doc, photo_xml)
 
-        # 2. 填充正文（区分左右半页控制字号）
+        # 2. 填充正文（自动分配字号：左半页小四 12pt / 右半页四号 14pt）
         count = 0
         min_top_in = 0.5
         usable_height_in = max_content_bottom_in - min_top_in
@@ -219,12 +209,11 @@ class DocxService:
 
             char_count = len(en_text)
 
-            # --- 核心字号分配策略 ---
             is_title = any(k in en_text.lower() for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
-            is_right_half = rel_left >= 0.45  # 判断是否位于右半边
+            is_right_half = rel_left >= 0.45
 
             if is_title:
-                font_size_pt = 16.0  # 标题：16pt
+                font_size_pt = 16.0
                 is_bold = True
             elif is_right_half:
                 font_size_pt = 14.0  # 右半页：四号 (14pt)
@@ -233,7 +222,6 @@ class DocxService:
                 font_size_pt = 12.0  # 左半页：小四 (12pt)
                 is_bold = False
 
-            # 计算宽度
             needed_w_in = char_count * (font_size_pt * 0.0068)
             width_in = max(rel_w * page_w_in * 1.3, needed_w_in)
             
@@ -242,7 +230,6 @@ class DocxService:
                 width_in = min(width_in, max_allowed_w)
             width_in = max(1.0, width_in)
 
-            # 计算高度
             chars_per_line = max(10, int((width_in * 72) / (font_size_pt * 0.55)))
             estimated_lines = math.ceil(char_count / chars_per_line)
             single_line_h_in = (font_size_pt / 72.0) * 1.4
@@ -318,5 +305,7 @@ class DocxService:
             "download_url": f"/api/download/{filename}",
             "block_count": count
         }
+
+docx_service = DocxService()
 
 docx_service = DocxService()
