@@ -11,7 +11,6 @@ from docx.oxml import parse_xml
 from docx.oxml.ns import nsmap, nsdecls
 import config
 
-# 注册 VML 和 Office 命名空间
 nsmap['v'] = 'urn:schemas-microsoft-com:vml'
 nsmap['o'] = 'urn:schemas-microsoft-com:office:office'
 
@@ -43,7 +42,7 @@ class DocxService:
 
     def _append_to_body(self, doc: Document, xml_str: str):
         element = parse_xml(xml_str)
-        sectPr = doc.element.body.find('{[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)}sectPr')
+        sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
         if sectPr is not None:
             sectPr.addprevious(element)
         else:
@@ -166,6 +165,8 @@ class DocxService:
         
         image_size = translated_data.get("image_size", {})
         blocks = translated_data.get("blocks", [])
+        if isinstance(blocks, dict):
+            blocks = blocks.get("blocks", [])
 
         orig_w = image_size.get("width", 4096)
         orig_h = image_size.get("height", 3072)
@@ -210,11 +211,18 @@ class DocxService:
         right_blocks = []
 
         for block in blocks:
-            en_text = block.get("en_text", "").strip()
+            if not isinstance(block, dict):
+                continue
+
+            # 💡【多通道字符提取】：智能尝试所有可能的字段 key
+            en_text = (block.get("en_text") or block.get("text") or block.get("translation") or "").strip()
             if not en_text:
                 continue
 
             bbox_rel = block.get("bbox_rel", {})
+            if not isinstance(bbox_rel, dict):
+                bbox_rel = {}
+
             rel_left = bbox_rel.get("left", 0.0)
             en_lower = en_text.lower()
 
@@ -222,10 +230,16 @@ class DocxService:
             is_right_kw = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation", "date of issue", "june", "july"])
             is_left_kw = any(k in en_lower for k in ["student id", "diploma no", "certificate no", "issuance no", "embossed seal"])
 
+            # 保证提取出来的结构包含标准的 en_text 和 bbox_rel
+            normalized_block = {
+                "en_text": en_text,
+                "bbox_rel": bbox_rel
+            }
+
             if (rel_left >= 0.40 or is_right_kw or is_title) and not is_left_kw:
-                right_blocks.append(block)
+                right_blocks.append(normalized_block)
             else:
-                left_blocks.append(block)
+                left_blocks.append(normalized_block)
 
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
         right_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
@@ -247,7 +261,7 @@ class DocxService:
             left_y += h_in + 0.15
             count += 1
 
-        # ==================== B. 右栏全量绘制（无遗漏） ====================
+        # ==================== B. 右栏全量绘制 ====================
         right_y = 0.8
         for b in right_blocks:
             text = b["en_text"]
@@ -282,7 +296,6 @@ class DocxService:
                 left_pos = 5.2
                 w_pos = page_w_in - 5.2 - 0.5
             else:
-                # 盖章等标注
                 font_sz = 9.5 if "seal" in t_lower or text.startswith("(") else 14.0
                 bold = False
                 h_in = 0.35
