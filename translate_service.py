@@ -39,30 +39,37 @@ class TranslationService:
             })
 
         prompt = f"""你是一名官方公证翻译与版面还原专家。
-下面是从一张证书图片中识别到的原始文本块 JSON 数组（包含文本 content 和相对坐标 bbox_rel）：
+下面是从一张毕业证书图片中识别到的原始文本块 JSON 数组：
 
 {json.dumps(input_blocks, ensure_ascii=False, indent=2)}
 
-【核心任务与位置硬性规则】：
-1. 语义拼接合框：请根据中文语境，将属于同一句话的碎块合并并翻译为通顺、标准的公证英文。
-2. 位置严格划分（非常重要）：
-   - 【右半页元素】：证书标题("Graduation Diploma")、正文段落、校长签印/签名("Principal: XXX (Signature)")、发证日期("July 10, 2026")，其坐标 bbox_rel.left 必须 >= 0.50！
-   - 【左半页元素】：照片框、学籍号("Student ID")、毕证字号("Certificate No")、(教育主管部门验印专用章)、(加盖学校行政章)，其坐标 bbox_rel.left 必须 <= 0.35！
-3. 印章与签名规范翻译：
-   - 校长签名：“校长签印 吴俊” -> "Principal: Wu Jun (Signature)"
-   - 圆章/行政章：“(加盖学校行政章)” -> "(Official Seal of Jiangsu Province Jingjiang Senior High School)"
-   - 教育局章：“(教育主管部门验印专用章)” -> "(Official Seal of Education Administrative Department)"
+【核心拼接规则（非常重要！）】：
+1. 右半页正文缝合（解决重叠的关键）：
+   - 原文中关于学生姓名、籍贯、性别、年龄、入学毕业时间、成绩合格、准予毕业的所有分散文本片段（如："学生", "曹亦凡", "系", "江苏省", "靖江市人", "性别男", "现年17周岁", "于2023年9月至2026年6月在本校高中修业三年期满", "成绩合格", "准予毕业"），必须【100% 缝合并翻译为【唯一的一段完整英文长句】】！
+   - 示例翻译："Student Cao Yifan, native of Jingjiang City, Jiangsu Province, male, aged 17, having completed the three-year senior high school program at this school from September 2023 to June 2026, with satisfactory academic performance, is hereby awarded graduation."
+   - 绝对严禁将右半页正文分成多个独立的 JSON 文本块！
+
+2. 右半页其他结构：
+   - 标题："Graduation Certificate" 或 "Jiangsu Province High School Graduation Certificate"
+   - 校长签名："Principal: Wu Jun (Signature)"
+   - 日期："July 10, 2026"
+
+3. 左半页标注结构：
+   - 教育局验印："(Official Seal of Education Administrative Department)"
+   - 学籍号："Student ID: G12826100520230264"
+   - 毕证字号："Certificate No.: 32128200520260276"
+   - 加盖学校行政章："(Official Seal of Jiangsu Province Jingjiang Senior High School)"
 
 【输出格式要求】：
-必须仅返回一个标准的 JSON 数组，严禁包含任何 Markdown 标记。格式如下：
+必须仅返回一个标准的 JSON 数组，严禁包含任何 Markdown 代码块标记（如 ```json）。格式如下：
 [
   {{
-    "en_text": "Translated text here",
+    "en_text": "Translated content here",
     "bbox_rel": {{
-      "left": 0.5500,
-      "top": 0.6500,
-      "width": 0.3500,
-      "height": 0.0500
+      "left": 0.5200,
+      "top": 0.2500,
+      "width": 0.4200,
+      "height": 0.3000
     }}
   }}
 ]
