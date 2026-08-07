@@ -2,7 +2,6 @@ import html
 import math
 import os
 import re
-import uuid
 from datetime import datetime
 from pathlib import Path
 from docx import Document
@@ -10,16 +9,6 @@ from docx.shared import Inches
 from docx.enum.section import WD_ORIENT
 from docx.oxml import parse_xml
 import config
-
-# 标准完整的 OpenXML 命名空间声明
-ALL_NAMESPACES = (
-    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
-    'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
-    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
-    'xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" '
-    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
-    'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"'
-)
 
 class DocxService:
     def __init__(self):
@@ -30,19 +19,19 @@ class DocxService:
         self._id_counter = 1
 
     def _get_next_id(self) -> int:
-        """生成全局严格递增且唯一的正整数 ID"""
+        """生成唯一 ID"""
         self._id_counter += 1
         return self._id_counter
 
     def _clean_text(self, text: str) -> str:
-        """过滤掉会导致 Word XML 损坏的 ASCII 控制字符"""
+        """过滤 XML 非法字符并转义"""
         if not text:
             return ""
         cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
         return html.escape(cleaned)
 
     def _append_to_body(self, doc: Document, xml_str: str):
-        """确保元素插入在分节符 (sectPr) 之前"""
+        """确保元素插入在分节符 (sectPr) 之前，防止被 Word 忽略"""
         element = parse_xml(xml_str)
         sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
         if sectPr is not None:
@@ -50,7 +39,7 @@ class DocxService:
         else:
             doc.element.body.append(element)
 
-    def _create_textbox_xml(
+    def _create_textbox_vml(
         self, 
         text: str, 
         left_in: float, 
@@ -59,129 +48,102 @@ class DocxService:
         height_in: float, 
         font_size_pt: float = 9.0,
         show_border: bool = False,
-        align_center: bool = False,
-        doc_pr_id: int = 1
+        align_center: bool = False
     ) -> str:
-        left_emu = int(left_in * 914400)
-        top_emu = int(top_in * 914400)
-        width_emu = int(width_in * 914400)
-        height_emu = int(height_in * 914400)
+        """使用标准 VML 绘制绝不报错的 Word 文本框"""
+        left_pt = left_in * 72.0
+        top_pt = top_in * 72.0
+        width_pt = width_in * 72.0
+        height_pt = height_in * 72.0
 
         safe_text = self._clean_text(text)
-        border_xml = '<a:ln w="12700"><a:solidFill><a:srgbClr val="B0B0B0"/></a:solidFill></a:ln>' if show_border else '<a:ln w="9525"><a:noFill/></a:ln>'
+        stroked = "t" if show_border else "f"
         align_xml = '<w:jc w:val="center"/>' if align_center else ''
 
+        # 处理多行文本，按 \n 切分为多个独立的段落
+        lines = safe_text.split('\n')
+        p_runs = []
+        for line in lines:
+            p_runs.append(
+                f'<w:p>'
+                f'  <w:pPr>{align_xml}<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
+                f'  <w:r>'
+                f'    <w:rPr>'
+                f'      <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+                f'      <w:sz w:val="{int(font_size_pt * 2)}"/>'
+                f'      <w:color w:val="333333"/>'
+                f'    </w:rPr>'
+                f'    <w:t>{line}</w:t>'
+                f'  </w:r>'
+                f'</w:p>'
+            )
+        txbx_content = "".join(p_runs)
+        doc_id = self._get_next_id()
+
         xml = f'''
-        <w:p {ALL_NAMESPACES}>
+        <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+             xmlns:v="urn:schemas-microsoft-com:vml">
           <w:r>
-            <w:drawing>
-              <wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="251658240" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
-                <wp:simplePos x="0" y="0"/>
-                <wp:positionH relativeFrom="page">
-                  <wp:posOffset>{left_emu}</wp:posOffset>
-                </wp:positionH>
-                <wp:positionV relativeFrom="page">
-                  <wp:posOffset>{top_emu}</wp:posOffset>
-                </wp:positionV>
-                <wp:extent cx="{width_emu}" cy="{height_emu}"/>
-                <wp:effectExtent l="0" t="0" r="0" b="0"/>
-                <wp:wrapNone/>
-                <wp:docPr id="{doc_pr_id}" name="TextBox_{doc_pr_id}"/>
-                <wp:cNvGraphicFramePr/>
-                <a:graphic>
-                  <a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
-                    <wps:wsp>
-                      <wps:cNvSpPr/>
-                      <wps:spPr>
-                        <a:xfrm>
-                          <a:off x="0" y="0"/>
-                          <a:ext cx="{width_emu}" cy="{height_emu}"/>
-                        </a:xfrm>
-                        <a:prstGeom prst="rect">
-                          <a:avLst/>
-                        </a:prstGeom>
-                        <a:noFill/>
-                        {border_xml}
-                      </wps:spPr>
-                      <wps:txbx>
-                        <w:txbxContent>
-                          <w:p>
-                            <w:pPr>
-                              {align_xml}
-                              <w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>
-                            </w:pPr>
-                            <w:r>
-                              <w:rPr>
-                                <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>
-                                <w:sz w:val="{int(font_size_pt * 2)}"/>
-                                <w:color w:val="333333"/>
-                              </w:rPr>
-                              <w:t>{safe_text}</w:t>
-                            </w:r>
-                          </w:p>
-                        </w:txbxContent>
-                      </wps:txbx>
-                      <wps:bodyPr lIns="36000" tIns="36000" rIns="36000" bIns="36000" anchor="ctr"/>
-                    </wps:wsp>
-                  </a:graphicData>
-                </a:graphic>
-              </wp:anchor>
-            </w:drawing>
+            <w:pict>
+              <v:shape id="box_{doc_id}" type="#_x0000_t202"
+                       style="position:absolute;left:{left_pt:.2f}pt;top:{top_pt:.2f}pt;width:{width_pt:.2f}pt;height:{height_pt:.2f}pt;z-index:251658240;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
+                       filled="f" stroked="{stroked}" strokecolor="#B0B0B0">
+                <v:textbox inset="0pt,0pt,0pt,0pt">
+                  <w:txbxContent>
+                    {txbx_content}
+                  </w:txbxContent>
+                </v:textbox>
+              </v:shape>
+            </w:pict>
           </w:r>
         </w:p>
         '''
         return xml
 
-    def _create_floating_image_xml(self, rId: str, left_in: float, top_in: float, width_in: float, height_in: float, doc_pr_id: int = 1) -> str:
-        left_emu = int(left_in * 914400)
-        top_emu = int(top_in * 914400)
-        width_emu = int(width_in * 914400)
-        height_emu = int(height_in * 914400)
+    def _create_line_vml(self, left_in: float, top_in: float, width_in: float) -> str:
+        """使用 VML 绘制横线"""
+        left_pt = left_in * 72.0
+        top_pt = top_in * 72.0
+        right_pt = (left_in + width_in) * 72.0
+        doc_id = self._get_next_id()
 
         xml = f'''
-        <w:p {ALL_NAMESPACES}>
+        <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+             xmlns:v="urn:schemas-microsoft-com:vml">
           <w:r>
-            <w:drawing>
-              <wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="251658240" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
-                <wp:simplePos x="0" y="0"/>
-                <wp:positionH relativeFrom="page">
-                  <wp:posOffset>{left_emu}</wp:posOffset>
-                </wp:positionH>
-                <wp:positionV relativeFrom="page">
-                  <wp:posOffset>{top_emu}</wp:posOffset>
-                </wp:positionV>
-                <wp:extent cx="{width_emu}" cy="{height_emu}"/>
-                <wp:effectExtent l="0" t="0" r="0" b="0"/>
-                <wp:wrapNone/>
-                <wp:docPr id="{doc_pr_id}" name="SealImage_{doc_pr_id}"/>
-                <wp:cNvGraphicFramePr/>
-                <a:graphic>
-                  <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
-                    <pic:pic>
-                      <pic:nvPicPr>
-                        <pic:cNvPr id="{doc_pr_id}" name="Seal.png"/>
-                        <pic:cNvPicPr/>
-                      </pic:nvPicPr>
-                      <pic:blipFill>
-                        <a:blip r:embed="{rId}"/>
-                        <a:stretch>
-                          <a:fillRect/>
-                        </a:stretch>
-                      </pic:blipFill>
-                      <pic:spPr>
-                        <a:xfrm>
-                          <a:off x="0" y="0"/>
-                          <a:ext cx="{width_emu}" cy="{height_emu}"/>
-                        </a:xfrm>
-                        <a:prstGeom prst="rect">
-                          <a:avLst/>
-                        </a:prstGeom>
-                      </pic:spPr>
-                    </pic:pic>
-                  </a:graphicData>
-                </a:graphic>
-              </wp:anchor>
-            </w:drawing>
+            <w:pict>
+              <v:line id="line_{doc_id}"
+                      style="position:absolute;left:0;text-align:left;z-index:251658240;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
+                      from="{left_pt:.2f}pt,{top_pt:.2f}pt"
+                      to="{right_pt:.2f}pt,{top_pt:.2f}pt"
+                      strokecolor="#000000" strokeweight="1pt"/>
+            </w:pict>
+          </w:r>
+        </w:p>
+        '''
+        return xml
+
+    def _create_floating_image_vml(self, rId: str, left_in: float, top_in: float, width_in: float, height_in: float) -> str:
+        """使用 VML 绘制浮动印章"""
+        left_pt = left_in * 72.0
+        top_pt = top_in * 72.0
+        width_pt = width_in * 72.0
+        height_pt = height_in * 72.0
+        doc_id = self._get_next_id()
+
+        xml = f'''
+        <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+             xmlns:v="urn:schemas-microsoft-com:vml"
+             xmlns:o="urn:schemas-microsoft-com:office:office"
+             xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+          <w:r>
+            <w:pict>
+              <v:shape id="seal_{doc_id}" type="#_x0000_t75"
+                       style="position:absolute;left:{left_pt:.2f}pt;top:{top_pt:.2f}pt;width:{width_pt:.2f}pt;height:{height_pt:.2f}pt;z-index:251658240;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
+                       filled="f" stroked="f">
+                <v:imagedata r:id="{rId}" o:title="Seal"/>
+              </v:shape>
+            </w:pict>
           </w:r>
         </w:p>
         '''
@@ -217,7 +179,7 @@ class DocxService:
         section.right_margin = Inches(0)
 
         # 1. 绘制 [Photo] 照片占位框
-        photo_xml = self._create_textbox_xml(
+        photo_xml = self._create_textbox_vml(
             text="Photo",
             left_in=1.0,
             top_in=0.8,
@@ -225,8 +187,7 @@ class DocxService:
             height_in=1.7,
             font_size_pt=11.0,
             show_border=True,
-            align_center=True,
-            doc_pr_id=self._get_next_id()
+            align_center=True
         )
         self._append_to_body(doc, photo_xml)
 
@@ -269,65 +230,23 @@ class DocxService:
             calculated_h_in = estimated_lines * single_line_h_in
             height_in = max(rel_h * page_h_in * 1.5, calculated_h_in + 0.2)
 
-            xml_str = self._create_textbox_xml(
+            xml_str = self._create_textbox_vml(
                 text=en_text,
                 left_in=left_in,
                 top_in=top_in,
                 width_in=width_in,
                 height_in=height_in,
-                font_size_pt=font_size_pt,
-                doc_pr_id=self._get_next_id()
+                font_size_pt=font_size_pt
             )
             self._append_to_body(doc, xml_str)
             count += 1
 
-        # 3. 绘制底部公证落款
+        # 3. 绘制底部公证落款 (分割线)
         footer_top_in = page_h_in - 1.8
-        line_id = self._get_next_id()
-        line_xml = f'''
-        <w:p {ALL_NAMESPACES}>
-          <w:r>
-            <w:drawing>
-              <wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="251658240" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">
-                <wp:simplePos x="0" y="0"/>
-                <wp:positionH relativeFrom="page">
-                  <wp:posOffset>{int(0.5 * 914400)}</wp:posOffset>
-                </wp:positionH>
-                <wp:positionV relativeFrom="page">
-                  <wp:posOffset>{int(footer_top_in * 914400)}</wp:posOffset>
-                </wp:positionV>
-                <wp:extent cx="{int((page_w_in - 1.0) * 914400)}" cy="12700"/>
-                <wp:effectExtent l="0" t="0" r="0" b="0"/>
-                <wp:wrapNone/>
-                <wp:docPr id="{line_id}" name="LineShape_{line_id}"/>
-                <wp:cNvGraphicFramePr/>
-                <a:graphic>
-                  <a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
-                    <wps:wsp>
-                      <wps:cNvSpPr/>
-                      <wps:spPr>
-                        <a:xfrm>
-                          <a:off x="0" y="0"/>
-                          <a:ext cx="{int((page_w_in - 1.0) * 914400)}" cy="12700"/>
-                        </a:xfrm>
-                        <a:prstGeom prst="rect">
-                          <a:avLst/>
-                        </a:prstGeom>
-                        <a:solidFill>
-                          <a:srgbClr val="000000"/>
-                        </a:solidFill>
-                        <a:ln><a:noFill/></a:ln>
-                      </wps:spPr>
-                    </wps:wsp>
-                  </a:graphicData>
-                </a:graphic>
-              </wp:anchor>
-            </w:drawing>
-          </w:r>
-        </w:p>
-        '''
+        line_xml = self._create_line_vml(left_in=0.5, top_in=footer_top_in, width_in=page_w_in - 1.0)
         self._append_to_body(doc, line_xml)
 
+        # 4. 绘制落款文本内容
         curr_date = datetime.now().strftime("%b %d, %Y")
         footer_text = (
             f"I confirm the above translation is an accurate translation of the Original document.\n"
@@ -339,34 +258,32 @@ class DocxService:
             f"Date of Translation: {curr_date}"
         )
 
-        footer_text_xml = self._create_textbox_xml(
+        footer_text_xml = self._create_textbox_vml(
             text=footer_text,
             left_in=0.5,
             top_in=footer_top_in + 0.08,
             width_in=page_w_in - 1.0,
             height_in=1.6,
-            font_size_pt=8.5,
-            doc_pr_id=self._get_next_id()
+            font_size_pt=8.5
         )
         self._append_to_body(doc, footer_text_xml)
 
-        # 4. 安全加载并插入印章
+        # 5. 安全加载并插入盖章图片
         if self.seal_path.exists():
             try:
                 rId, _ = doc.part.get_or_add_image(str(self.seal_path))
-                seal_xml = self._create_floating_image_xml(
+                seal_xml = self._create_floating_image_vml(
                     rId=rId,
                     left_in=page_w_in - 4.2,
                     top_in=footer_top_in + 0.1,
                     width_in=1.8,
-                    height_in=1.5,
-                    doc_pr_id=self._get_next_id()
+                    height_in=1.5
                 )
                 self._append_to_body(doc, seal_xml)
             except Exception as e:
                 print(f"Warning: Failed to append seal image: {e}")
 
-        # 5. 保存文档
+        # 6. 保存文档
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"translated_certificate_{timestamp}.docx"
         file_path = self.output_dir / filename
