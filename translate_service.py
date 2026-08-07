@@ -63,10 +63,13 @@ class TranslationService:
                     "bbox_rel": b.get("bbox_rel")
                 })
 
+        input_json_str = json.dumps(input_blocks, ensure_ascii=False, indent=2)
+
+        # 💡 核心转义修复：用 {{ }} 保护提示词里的 JSON 格式示例
         prompt_text = f"""你是一名精通中国官方毕业证书/学位证书公证翻译的视觉大模型专家。
 附件是一张毕业证书的原图，下方是从该图片中初步提取到的文本块 JSON 数组：
 
-{json.dumps(input_blocks, ensure_ascii=False, indent=2)}
+{input_json_str}
 
 【核心任务】：
 请结合原图和文本块，对毕业证书进行完整的英文公证翻译与结构化整合：
@@ -83,7 +86,13 @@ class TranslationService:
 - 右半页元素（标题、正文段落、学校公章、校长签名、发证日期）：bbox_rel.left 设为 0.52。
 
 【输出要求】：
-必须直接返回一个标准的 JSON 数组 `[{"en_text": "...", "bbox_rel": {"left": 0.52, "top": 0.2}}, ...]`。
+必须直接返回一个标准的 JSON 数组，格式形如：
+[
+  {{
+    "en_text": "Student Niu Wen...",
+    "bbox_rel": {{"left": 0.52, "top": 0.2}}
+  }}
+]
 严禁使用 Markdown 代码块，保证输出可以直接被 json.loads 解析！
 """
 
@@ -113,7 +122,6 @@ class TranslationService:
 
             res_content = response.choices[0].message.content.strip()
 
-            # 强力 Markdown 标记清洗
             if "```" in res_content:
                 lines = res_content.split("\n")
                 cleaned = [l for l in lines if not l.strip().startswith("```")]
@@ -121,7 +129,6 @@ class TranslationService:
 
             parsed = json.loads(res_content)
 
-            # 💡【核心防错解包】：容错处理，无论返回 list 还是 dict 都能成功解出列表
             if isinstance(parsed, dict):
                 merged_list = parsed.get("blocks") or parsed.get("data") or parsed.get("translated_blocks") or [parsed]
             elif isinstance(parsed, list):
@@ -129,7 +136,6 @@ class TranslationService:
             else:
                 merged_list = []
 
-            # 💡【核心字段规范化】：不管模型返回的 Key 叫 en_text, text 还是 translation，统一规整为 en_text
             final_blocks = []
             for item in merged_list:
                 if isinstance(item, dict):
