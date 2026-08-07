@@ -214,6 +214,7 @@ class DocxService:
 
             bbox_rel = block.get("bbox_rel", {})
             rel_left = bbox_rel.get("left", 0.0)
+            rel_top = bbox_rel.get("top", 0.0)  # 💡【核心修复】：补齐定义 rel_top
 
             char_count = len(en_text)
             en_lower = en_text.lower()
@@ -227,7 +228,6 @@ class DocxService:
             if is_right_half:
                 # ================= 右半页 =================
                 if is_title:
-                    # 💡【标题 1 行保护】：起点放宽至 4.8 英寸，赋予 6.6 英寸超大宽度，保证 1 行整齐放满
                     font_size_pt = 15.0
                     is_bold = True
                     left_in = 4.8
