@@ -43,22 +43,22 @@ class TranslationService:
 
 {json.dumps(input_blocks, ensure_ascii=False, indent=2)}
 
-【通用公证翻译与缝合规范】：
-1. 右半页正文100%完整缝合（核心）：
+【核心任务与精准提取规则】：
+1. 右半页正文100%完整缝合：
    - 将关于学生姓名、性别、出生日期/年龄、入学毕业时间、修业期满、成绩合格、准予毕业的所有分散字段，【100% 合并并翻译为唯一一条完整的英文公证长句】！
    - 示例："Student Niu Wen, female, born on October 12, 2006, aged 18, having completed the three-year senior high school program at this school from September 2022 to June 2025, with satisfactory academic performance, is hereby awarded graduation."
-   - 严禁将正文拆分成多条碎片文字！
 
-2. 签名与印章提取：
-   - 校长签名：如果能识别出姓名，输出 "Principal: [Name] (Signature)"；若只有签名字样无清晰姓名，输出 "Principal: (Signature)"。
-   - 钢印/印章标注：翻译为 "(Official Seal)"、"(School embossed seal)" 或 "(Official Seal of Education Administrative Department)"。
+2. 印章文字与手写签名精准辨认（极其重要！）：
+   - 【严禁直接返回泛化的 (Official Seal) 或 Principal: (Signature)】！
+   - 【学校公章识别】：请结合图片上下文和红章中的环形字迹识别出具体学校全称（例如识别出“江浦高级中学文昌校区” -> 必须翻译为 `(Official Seal of Jiangpu Senior High School Wenchang Campus)`；识别出“南京市教育局” -> `(Official Seal of Education Administrative Department of Nanjing Municipal Education Bureau)`）。
+   - 【校长签名识别】：请根据“校长（签印）”旁边的手写草书签名字迹辨认出具体姓名（例如草书“薄治中” -> 必须翻译为 `Principal: Bo Zhizhong (Signature)`；草书“吴俊” -> `Principal: Wu Jun (Signature)`）。
 
-3. 位置标识 left：
-   - 左半页元素（学籍号、毕证字号、发证号、钢印说明等），bbox_rel.left 设为 0.08。
-   - 右半页元素（标题、正文段落、校长签名、发证日期），bbox_rel.left 设为 0.52。
+3. 左右半页位置定位：
+   - 左半页元素（学籍号、毕证字号、发证编号、钢印说明、教育局验印章等）：bbox_rel.left 设为 0.08。
+   - 右半页元素（证书标题、毕业正文长句、学校公章说明、校长签名、发证日期）：bbox_rel.left 设为 0.52。
 
 【输出格式要求】：
-必须仅返回一个标准的 JSON 数组，严禁包含任何 Markdown 标记（如 ```json）。格式如下：
+必须仅返回一个标准的 JSON 数组，严禁包含任何 Markdown 代码块标记（如 ```json）。格式如下：
 [
   {{
     "en_text": "Translated content",
