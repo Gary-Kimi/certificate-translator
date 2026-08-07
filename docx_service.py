@@ -74,6 +74,7 @@ class DocxService:
                           </w:p>
                         </w:txbxContent>
                       </wps:txbx>
+                      <!-- 内边距全部清零，避免挤压空间 -->
                       <wps:bodyPr lIns="0" tIns="0" rIns="0" bIns="0" anchor="t"/>
                     </wps:wsp>
                   </a:graphicData>
@@ -127,32 +128,36 @@ class DocxService:
             left_in = rel_left * page_w_in
             top_in = rel_top * page_h_in
 
-            # 1. 计算宽度
             char_count = len(en_text)
-            needed_w_in = char_count * 0.062
-            width_in = max(rel_w * page_w_in * 1.3, needed_w_in)
-            
-            # 限制不能超出页面右边界
-            max_allowed_w = page_w_in - left_in - 0.2
-            if max_allowed_w > 0.5:
-                width_in = min(width_in, max_allowed_w)
-            width_in = max(0.8, width_in)
 
-            # 2. 自适应选择字号
-            if char_count > 60:
+            # 1. 宽度算法：为英文留出足够横向展宽
+            needed_w_in = char_count * 0.065
+            width_in = max(rel_w * page_w_in * 1.35, needed_w_in)
+            
+            # 限制右边界不能溢出页面右边缘
+            max_allowed_w = page_w_in - left_in - 0.2
+            if max_allowed_w > 0.8:
+                width_in = min(width_in, max_allowed_w)
+            width_in = max(1.0, width_in)
+
+            # 2. 字号智能调节
+            if char_count > 80:
                 font_size_pt = 8.0
-            elif char_count > 30:
+            elif char_count > 40:
                 font_size_pt = 9.0
             else:
                 font_size_pt = 10.0
 
-            # 3.【解决图二】动态估算折行后的高度，防止文本下半部分被截断
-            estimated_lines = math.ceil(needed_w_in / width_in)
-            line_height_in = (font_size_pt / 72.0) * 1.35  # 单行高度（英吋）
-            needed_h_in = estimated_lines * line_height_in
+            # 3. 高度安全扩展算法（彻底解决截断下半部分问题）
+            chars_per_line = max(10, int((width_in * 72) / (font_size_pt * 0.58)))
+            estimated_lines = math.ceil(char_count / chars_per_line)
             
-            # 文本框高度取原始高度和计算所需高度的最大值
-            height_in = max(rel_h * page_h_in * 1.3, needed_h_in)
+            # 单行高度（磅转英吋）
+            single_line_h_in = (font_size_pt / 72.0) * 1.45
+            calculated_h_in = estimated_lines * single_line_h_in
+            
+            # 给纵向高度加上 0.2 英吋的安全 Padding，确保绝对不被下边缘裁切
+            height_in = max(rel_h * page_h_in * 1.5, calculated_h_in + 0.2)
 
             xml_str = self._create_textbox_xml(
                 text=en_text,
