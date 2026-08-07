@@ -12,7 +12,6 @@ class TranslationService:
         pass
 
     def _get_client_and_key(self):
-        """获取 Qwen DashScope 的 API Key 并初始化兼容模式客户端（延长超时至 120 秒）"""
         api_key = os.getenv("QWEN_API_KEY", getattr(config, "QWEN_API_KEY", ""))
         try:
             import streamlit as st
@@ -27,15 +26,10 @@ class TranslationService:
             raise ValueError("未检测到有效的通义千问 API Key (QWEN_API_KEY)，请在 Secrets 中配置！")
 
         base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        # 💡 将 timeout 延长至 120 秒，给大模型充分的处理时间
         client = OpenAI(api_key=api_key, base_url=base_url, timeout=120.0)
         return client
 
     def _encode_image_to_base64(self, image_input) -> str:
-        """
-        💡 核心提速函数：将大图自动压缩至合适尺寸 (最长边 1280px)，
-        数据体积缩小 90% 以上，彻底杜绝传输与模型推理超时！
-        """
         try:
             if isinstance(image_input, (str, Path)):
                 img = Image.open(image_input)
@@ -44,21 +38,16 @@ class TranslationService:
             else:
                 raise ValueError("不支持的图片输入格式，需为路径或 bytes。")
 
-            # 统一转为 RGB 格式以进行 JPEG 压缩
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
 
-            # 保持清晰度的同时缩放尺寸 (最长边上限 1280px)
             max_size = 1280
             if max(img.width, img.height) > max_size:
                 img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
 
-            # 导出为高品质 JPEG 字节流
             buffer = io.BytesIO()
             img.save(buffer, format="JPEG", quality=85)
-            compressed_bytes = buffer.getvalue()
-
-            return base64.b64encode(compressed_bytes).decode("utf-8")
+            return base64.b64encode(buffer.getvalue()).decode("utf-8")
         except Exception as e:
             raise RuntimeError(f"图片压缩编码失败: {str(e)}")
 
@@ -80,37 +69,25 @@ class TranslationService:
 
 {json.dumps(input_blocks, ensure_ascii=False, indent=2)}
 
-【核心任务：双眼看图 + 精准翻译公证】：
-1. 视觉识破红章与草书（最重要！）：
-   - 请用眼睛【仔细观察图片右下方和左下方的红色公章/印章】！红章文字通常是弧形环绕的（例如“江浦高级中学文昌校区”、“南京市教育局”等）。请将读出的具体机构名称规范翻译为 `(Official Seal of [具体机构英文名])`。
-   - 请用眼睛【仔细观察“校长（签印）”旁边的红色手写草书签名】！辨认出具体的校长姓名（例如草书“薄治中” -> `Principal: Bo Zhizhong (Signature)`）。严禁直接返回无姓名的通用占位符！
+【核心任务：必须完整提取并翻译以下【所有】文本块，绝对不能漏掉正文段落！】：
+1. 证书标题：翻译为 "Graduation Certificate" 或 "Jiangsu Province High School Graduation Certificate"。
+2. 毕业正文长句（核心！）：将关于学生姓名(如"牛雯")、性别、出生年月、入学毕业时间、修业期满、成绩合格、准予毕业的所有文字，【100% 完整合成为一条连贯的英文公证长句】！
+   示例："Student Niu Wen, female, born on October 12, 2006, aged 18, having completed the three-year senior high school program at this school from September 2022 to June 2025, with satisfactory academic performance, is hereby awarded graduation."
+3. 学校公章：仔细识别红色圆章弧形字迹（如“江浦高级中学文昌校区”），输出 `(Official Seal of Jiangpu Senior High School, Wenchang Campus)`。
+4. 校长签名：仔细识别草书签名字迹（如“薄治中”），输出 `Principal: Bo Zhizhong (Signature)`。
+5. 发证日期：翻译为 `Date of Issue: June 2025`。
+6. 左半页信息：学籍号(`Student ID:...`)、毕证字号(`Diploma No.:...`)、发证编号(`Certificate No.:...`)、钢印标注(`(School embossed seal)`)等。
 
-2. 右半页正文100%完整合框：
-   - 将关于学生姓名、性别、出生日期/年龄、入学毕业时间、修业期满、成绩合格、准予毕业的所有分散文本片段，【100% 缝合并翻译为唯一一条完整的英文公证长句】！
-   - 示例："Student Niu Wen, female, born on October 12, 2006, aged 18, having completed the three-year senior high school program at this school from September 2022 to June 2025, with satisfactory academic performance, is hereby awarded graduation."
+【位置 left 设定】：
+- 左半页元素：bbox_rel.left 设为 0.08。
+- 右半页元素（标题、正文段落、学校公章、校长签名、发证日期）：bbox_rel.left 设为 0.52。
 
-3. 左右版面分栏（left 坐标设定）：
-   - 左半页元素（学籍号、毕证字号、发证编号、钢印说明、教育局验印章等）：bbox_rel.left 统一设为 0.08。
-   - 右半页元素（证书标题、毕业正文长句、学校公章说明、校长签名、发证日期）：bbox_rel.left 统一设为 0.52。
-
-【输出格式要求】：
-必须仅返回一个标准的 JSON 数组，严禁包含任何 Markdown 代码块标记（如 ```json）。格式如下：
-[
-  {{
-    "en_text": "Translated content here",
-    "bbox_rel": {{
-      "left": 0.5200,
-      "top": 0.2500,
-      "width": 0.4200,
-      "height": 0.3000
-    }}
-  }}
-]
+【输出要求】：
+必须返回且仅返回包含上述【所有文本块】的 JSON 数组，严禁遗漏正文！格式为标准的 JSON 数组，严禁 Markdown 代码块。
 """
 
         try:
             client = self._get_client_and_key()
-
             content_list = [{"type": "text", "text": prompt_text}]
 
             if image_input:
