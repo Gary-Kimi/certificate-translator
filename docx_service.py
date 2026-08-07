@@ -33,7 +33,7 @@ class DocxService:
         return None
 
     def _is_chinese(self, text: str) -> bool:
-        """检查文本是否包含过多的原始中文字符（用于过滤泄露的 OCR 碎片）"""
+        """检查文本是否包含过多的原始中文字符（过滤可能遗留的原始 OCR 碎片）"""
         chinese_chars = re.findall(r'[\u4e00-\u9fa5]', text)
         return len(chinese_chars) > 2
 
@@ -93,7 +93,6 @@ class DocxService:
             section.page_width = Inches(8.27)
             section.page_height = Inches(11.69)
 
-        # 💡【沉降优化 1】：适度加大 top_margin，让主体整体向下平移
         section.top_margin = Inches(0.8)
         section.bottom_margin = Inches(1.8)
         section.left_margin = Inches(0.6)
@@ -103,39 +102,26 @@ class DocxService:
         left_blocks = []
         raw_right_blocks = []
 
+        # 💡【通用纯物理分栏逻辑】：按绝对坐标 X (0.45) 划归左右半页，不做任何特例硬编码
         for block in blocks:
             if not isinstance(block, dict):
                 continue
 
             en_text = (block.get("en_text") or block.get("text") or block.get("translation") or "").strip()
-            if not en_text:
-                continue
-
-            if self._is_chinese(en_text):
+            if not en_text or self._is_chinese(en_text):
                 continue
 
             bbox_rel = block.get("bbox_rel", {})
             rel_left = bbox_rel.get("left", 0.0)
-            en_lower = en_text.lower()
-
-            is_strictly_left_kw = any(k in en_lower for k in [
-                "student registration number", "graduation certificate number", 
-                "diploma number", "reissued if lost"
-            ])
-            
-            is_strictly_right_kw = any(k in en_lower for k in [
-                "principal", "date of issue", "this is to certify", "having completed", 
-                "granted graduation", "awarded graduation", "student of"
-            ])
 
             normalized_block = {"en_text": en_text, "bbox_rel": bbox_rel}
 
-            if (rel_left >= 0.40 or is_strictly_right_kw) and not is_strictly_left_kw:
+            if rel_left >= 0.45:
                 raw_right_blocks.append(normalized_block)
             else:
                 left_blocks.append(normalized_block)
 
-        # 钢印自动保护
+        # 钢印强力保护
         has_embossed_seal = any("embossed seal" in b.get("en_text", "").lower() for b in left_blocks)
         if not has_embossed_seal:
             left_blocks.append({
@@ -145,7 +131,7 @@ class DocxService:
 
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
 
-        # 右栏分类
+        # 💡【通用语义流分类】：将右半页元素归类为通用语义结构
         title_block = None
         main_block = None
         principal_block = None
@@ -160,29 +146,28 @@ class DocxService:
                 principal_block = b
             elif "date of issue" in t_low or "date:" in t_low or (len(txt) < 40 and any(m in t_low for m in ["july", "june", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"])):
                 date_block = b
-            elif any(k in t_low for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation", "diploma", "certificate title"]):
-                if "seal" not in t_low and "stamp" not in t_low:
-                    title_block = b
-                else:
-                    other_right_blocks.append(b)
-            elif any(k in t_low for k in ["this is to certify", "student of", "the student", "having completed", "hereby granted", "hereby awarded", "completed senior", "studied at", "courses with", "satisfactory results"]) or len(txt) > 50:
+            elif any(k in t_low for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation", "diploma", "certificate title"]) and "seal" not in t_low and "stamp" not in t_low:
+                title_block = b
+            elif any(k in t_low for k in ["this is to certify", "student of", "the student", "having completed", "hereby granted", "hereby awarded", "completed senior", "studied at", "courses with", "satisfactory results", "passed all"]) or len(txt) > 50:
                 main_block = b
             else:
                 other_right_blocks.append(b)
 
+        # 组合右页完整语义排版流
         right_blocks_ordered = []
         if title_block:
             right_blocks_ordered.append((title_block, "title"))
         if main_block:
             right_blocks_ordered.append((main_block, "main"))
+        # 右半页上的印章说明跟在正文下方
+        for ob in other_right_blocks:
+            right_blocks_ordered.append((ob, "seal_other"))
         if principal_block:
             right_blocks_ordered.append((principal_block, "principal"))
         if date_block:
             right_blocks_ordered.append((date_block, "date"))
-        for ob in other_right_blocks:
-            right_blocks_ordered.append((ob, "other"))
 
-        # 主结构双栏表格
+        # 主结构双栏无框表格
         main_table = doc.add_table(rows=1, cols=2)
         main_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         main_table.autofit = False
@@ -195,7 +180,7 @@ class DocxService:
         cell_left = main_table.cell(0, 0)
         cell_right = main_table.cell(0, 1)
 
-        # ==================== A. 左半区渲染 (视觉居中调校) ====================
+        # ==================== A. 左半区渲染 ====================
         photo_table = cell_left.add_table(rows=1, cols=1)
         photo_table.alignment = WD_TABLE_ALIGNMENT.CENTER
         photo_cell = photo_table.cell(0, 0)
@@ -203,7 +188,6 @@ class DocxService:
         
         p_photo = photo_cell.paragraphs[0]
         p_photo.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        # 💡【沉降优化 2】：照片顶部增加留白 Pt(36)，与右侧标题对齐下移
         p_photo.paragraph_format.space_before = Pt(36)
         p_photo.paragraph_format.space_after = Pt(14)
         
@@ -224,7 +208,7 @@ class DocxService:
 
             self._add_formatted_runs(p, text, default_font_size=font_sz)
 
-        # ==================== B. 右半区渲染 (呼吸感下移调校) ====================
+        # ==================== B. 右半区通用语义流渲染 ====================
         p_right_first = cell_right.paragraphs[0]
         first_right = True
 
@@ -240,33 +224,33 @@ class DocxService:
 
             if b_type == "title":
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                # 💡【沉降优化 3】：标题顶部 Pt(36)，下方留白 Pt(24)
                 p.paragraph_format.space_before = Pt(36)
                 p.paragraph_format.space_after = Pt(24)
                 self._add_formatted_runs(p, text, default_font_size=16.0, default_bold=True)
             elif b_type == "main":
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
                 p.paragraph_format.space_before = Pt(10)
-                p.paragraph_format.space_after = Pt(28)
-                p.paragraph_format.line_spacing = 1.4  # 提升行间距，填补垂直空间
+                p.paragraph_format.space_after = Pt(20)
+                p.paragraph_format.line_spacing = 1.4
                 self._add_formatted_runs(p, text, default_font_size=13.0, default_bold=False)
             elif b_type == "principal":
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                p.paragraph_format.space_before = Pt(24)
-                p.paragraph_format.space_after = Pt(18)
+                p.paragraph_format.space_before = Pt(20)
+                p.paragraph_format.space_after = Pt(14)
                 self._add_formatted_runs(p, text, default_font_size=13.0, default_bold=False)
             elif b_type == "date":
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-                p.paragraph_format.space_before = Pt(18)
+                p.paragraph_format.space_before = Pt(14)
                 p.paragraph_format.space_after = Pt(12)
                 self._add_formatted_runs(p, text, default_font_size=12.5, default_bold=False)
             else:
+                # 右页上的公章等其他元素居中或靠左小字排版
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER if "seal" in text.lower() else WD_ALIGN_PARAGRAPH.LEFT
                 p.paragraph_format.space_before = Pt(4)
                 p.paragraph_format.space_after = Pt(4)
                 self._add_formatted_runs(p, text, default_font_size=10.0, default_bold=False)
 
-        # ==================== C. 原生页脚挂载 (置底锁定) ====================
+        # ==================== C. 原生页脚挂载 ====================
         footer = section.footer
         
         p_line = footer.paragraphs[0]
