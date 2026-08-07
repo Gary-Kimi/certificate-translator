@@ -1,4 +1,5 @@
 import html
+import math
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -12,10 +13,7 @@ class DocxService:
     def __init__(self):
         self.output_dir = config.OUTPUT_DIR
 
-    def _create_textbox_xml(self, text: str, left_in: float, top_in: float, width_in: float, height_in: float, font_size_pt: int = 9) -> str:
-        """
-        通过 OpenXML 构建 Word 绝对定位透明文本框
-        """
+    def _create_textbox_xml(self, text: str, left_in: float, top_in: float, width_in: float, height_in: float, font_size_pt: float = 9.0) -> str:
         left_emu = int(left_in * 914400)
         top_emu = int(top_in * 914400)
         width_emu = int(width_in * 914400)
@@ -23,7 +21,6 @@ class DocxService:
 
         safe_text = html.escape(text)
 
-        # 核心优化：bodyPr 的 lIns/tIns/rIns/bIns 全部设为 0，清除内边距挤压
         xml = f'''
         <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
              xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
@@ -65,19 +62,18 @@ class DocxService:
                         <w:txbxContent>
                           <w:p>
                             <w:pPr>
-                              <w:spacing w:before="0" w:after="0" w:line="200" w:lineRule="auto"/>
+                              <w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>
                             </w:pPr>
                             <w:r>
                               <w:rPr>
                                 <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>
-                                <w:sz w:val="{font_size_pt * 2}"/>
+                                <w:sz w:val="{int(font_size_pt * 2)}"/>
                               </w:rPr>
                               <w:t>{safe_text}</w:t>
                             </w:r>
                           </w:p>
                         </w:txbxContent>
                       </wps:txbx>
-                      <!-- 将四周内边距全部设为 0 -->
                       <wps:bodyPr lIns="0" tIns="0" rIns="0" bIns="0" anchor="t"/>
                     </wps:wsp>
                   </a:graphicData>
@@ -130,33 +126,33 @@ class DocxService:
 
             left_in = rel_left * page_w_in
             top_in = rel_top * page_h_in
-            
-            # --- 优化策略 1：根据英文长度估算所需宽度（按 9pt 字号每字符约 0.065 英寸计算） ---
+
+            # 1. 计算宽度
             char_count = len(en_text)
-            needed_w_in = char_count * 0.065
-            
-            # 取“原始标注框的 1.3 倍”与“英文估计所需宽度”的最大值
+            needed_w_in = char_count * 0.062
             width_in = max(rel_w * page_w_in * 1.3, needed_w_in)
             
-            # 限制右边界：确保文本框延伸不会超出页面右边缘
+            # 限制不能超出页面右边界
             max_allowed_w = page_w_in - left_in - 0.2
             if max_allowed_w > 0.5:
                 width_in = min(width_in, max_allowed_w)
-            
             width_in = max(0.8, width_in)
 
-            # --- 优化策略 2：适当放宽文本框高度 ---
-            height_in = max(0.3, rel_h * page_h_in * 1.25)
-
-            # --- 优化策略 3：根据文本长度智能自适应调整字号 ---
+            # 2. 自适应选择字号
             if char_count > 60:
-                font_size_pt = 7.5
-            elif char_count > 40:
-                font_size_pt = 8.5
-            elif char_count > 20:
-                font_size_pt = 9.5
+                font_size_pt = 8.0
+            elif char_count > 30:
+                font_size_pt = 9.0
             else:
-                font_size_pt = 10.5
+                font_size_pt = 10.0
+
+            # 3.【解决图二】动态估算折行后的高度，防止文本下半部分被截断
+            estimated_lines = math.ceil(needed_w_in / width_in)
+            line_height_in = (font_size_pt / 72.0) * 1.35  # 单行高度（英吋）
+            needed_h_in = estimated_lines * line_height_in
+            
+            # 文本框高度取原始高度和计算所需高度的最大值
+            height_in = max(rel_h * page_h_in * 1.3, needed_h_in)
 
             xml_str = self._create_textbox_xml(
                 text=en_text,
