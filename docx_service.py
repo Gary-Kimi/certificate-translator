@@ -8,7 +8,12 @@ from docx import Document
 from docx.shared import Inches
 from docx.enum.section import WD_ORIENT
 from docx.oxml import parse_xml
+from docx.oxml.ns import nsmap, nsdecls
 import config
+
+# 💡 核心修复：将 VML 和 Office 命名空间动态注册到 python-docx 内部映射表中
+nsmap['v'] = 'urn:schemas-microsoft-com:vml'
+nsmap['o'] = 'urn:schemas-microsoft-com:office:office'
 
 class DocxService:
     def __init__(self):
@@ -16,6 +21,7 @@ class DocxService:
         self._id_counter = 1
 
     def _find_seal_file(self) -> Path:
+        """大小写不敏感查找印章图片文件 (适应 Linux 云端环境)"""
         possible_names = ["seal.png", "Seal.png", "SEAL.PNG", "seal.PNG"]
         search_dirs = [Path("."), Path(__file__).resolve().parent]
         for d in search_dirs:
@@ -30,14 +36,17 @@ class DocxService:
         return self._id_counter
 
     def _clean_text(self, text: str) -> str:
+        """过滤 XML 非法控制字符与不可见空白字符"""
         if not text:
             return ""
-        cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
+        cleaned = text.replace('\xa0', ' ').replace('\u200b', '')
+        cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', cleaned)
         return html.escape(cleaned)
 
     def _append_to_body(self, doc: Document, xml_str: str):
+        """将元素安全插入到分节符 (sectPr) 之前，防止被 Word 抛弃"""
         element = parse_xml(xml_str)
-        sectPr = doc.element.body.find('{[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)}sectPr')
+        sectPr = doc.element.body.find('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sectPr')
         if sectPr is not None:
             sectPr.addprevious(element)
         else:
@@ -70,37 +79,37 @@ class DocxService:
         for line in lines:
             p_runs.append(
                 f'<w:p>'
-                f'  <w:pPr>{align_xml}<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
-                f'  <w:r>'
-                f'    <w:rPr>'
-                f'      <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
-                f'      {bold_xml}'
-                f'      <w:sz w:val="{int(font_size_pt * 2)}"/>'
-                f'      <w:color w:val="000000"/>'
-                f'    </w:rPr>'
-                f'    <w:t>{line}</w:t>'
-                f'  </w:r>'
+                f'<w:pPr>{align_xml}<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
+                f'<w:r>'
+                f'<w:rPr>'
+                f'<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/>'
+                f'{bold_xml}'
+                f'<w:sz w:val="{int(font_size_pt * 2)}"/>'
+                f'<w:color w:val="000000"/>'
+                f'</w:rPr>'
+                f'<w:t>{line}</w:t>'
+                f'</w:r>'
                 f'</w:p>'
             )
         txbx_content = "".join(p_runs)
         doc_id = self._get_next_id()
 
-        xml = f'''<w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
-                     xmlns:v="urn:schemas-microsoft-com:vml">
-          <w:r>
-            <w:pict>
-              <v:shape id="box_{doc_id}" type="#_x0000_t202"
-                       style="position:absolute;left:{left_pt:.2f}pt;top:{top_pt:.2f}pt;width:{width_pt:.2f}pt;height:{height_pt:.2f}pt;z-index:251658240;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
-                       filled="f" stroked="{stroked}" strokecolor="#B0B0B0">
-                <v:textbox inset="0pt,0pt,0pt,0pt">
-                  <w:txbxContent>
-                    {txbx_content}
-                  </w:txbxContent>
-                </v:textbox>
-              </v:shape>
-            </w:pict>
-          </w:r>
-        </w:p>'''
+        ns_str = nsdecls('w', 'v')
+        xml = (
+            f'<w:p {ns_str}>'
+            f'<w:r>'
+            f'<w:pict>'
+            f'<v:shape id="box_{doc_id}" type="#_x0000_t202" '
+            f'style="position:absolute;left:{left_pt:.2f}pt;top:{top_pt:.2f}pt;width:{width_pt:.2f}pt;height:{height_pt:.2f}pt;z-index:251658240;mso-position-horizontal-relative:page;mso-position-vertical-relative:page" '
+            f'filled="f" stroked="{stroked}" strokecolor="#B0B0B0">'
+            f'<v:textbox inset="0pt,0pt,0pt,0pt">'
+            f'<w:txbxContent>{txbx_content}</w:txbxContent>'
+            f'</v:textbox>'
+            f'</v:shape>'
+            f'</w:pict>'
+            f'</w:r>'
+            f'</w:p>'
+        )
         return xml
 
     def _create_line_vml(self, left_in: float, top_in: float, width_in: float) -> str:
@@ -109,18 +118,19 @@ class DocxService:
         right_pt = (left_in + width_in) * 72.0
         doc_id = self._get_next_id()
 
-        xml = f'''<w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
-                     xmlns:v="urn:schemas-microsoft-com:vml">
-          <w:r>
-            <w:pict>
-              <v:line id="line_{doc_id}"
-                      style="position:absolute;left:0;text-align:left;z-index:251658240;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
-                      from="{left_pt:.2f}pt,{top_pt:.2f}pt"
-                      to="{right_pt:.2f}pt,{top_pt:.2f}pt"
-                      strokecolor="#000000" strokeweight="1.2pt"/>
-            </w:pict>
-          </w:r>
-        </w:p>'''
+        ns_str = nsdecls('w', 'v')
+        xml = (
+            f'<w:p {ns_str}>'
+            f'<w:r>'
+            f'<w:pict>'
+            f'<v:line id="line_{doc_id}" '
+            f'style="position:absolute;left:0;text-align:left;z-index:251658240;mso-position-horizontal-relative:page;mso-position-vertical-relative:page" '
+            f'from="{left_pt:.2f}pt,{top_pt:.2f}pt" to="{right_pt:.2f}pt,{top_pt:.2f}pt" '
+            f'strokecolor="#000000" strokeweight="1.2pt"/>'
+            f'</w:pict>'
+            f'</w:r>'
+            f'</w:p>'
+        )
         return xml
 
     def _create_floating_image_vml(self, rId: str, left_in: float, top_in: float, width_in: float, height_in: float) -> str:
@@ -130,20 +140,20 @@ class DocxService:
         height_pt = height_in * 72.0
         doc_id = self._get_next_id()
 
-        xml = f'''<w:p xmlns:w="[http://schemas.openxmlformats.org/wordprocessingml/2006/main](http://schemas.openxmlformats.org/wordprocessingml/2006/main)"
-                     xmlns:v="urn:schemas-microsoft-com:vml"
-                     xmlns:o="urn:schemas-microsoft-com:office:office"
-                     xmlns:r="[http://schemas.openxmlformats.org/officeDocument/2006/relationships](http://schemas.openxmlformats.org/officeDocument/2006/relationships)">
-          <w:r>
-            <w:pict>
-              <v:shape id="seal_{doc_id}" type="#_x0000_t75"
-                       style="position:absolute;left:{left_pt:.2f}pt;top:{top_pt:.2f}pt;width:{width_pt:.2f}pt;height:{height_pt:.2f}pt;z-index:251658240;mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
-                       filled="f" stroked="f">
-                <v:imagedata r:id="{rId}" o:title="Seal"/>
-              </v:shape>
-            </w:pict>
-          </w:r>
-        </w:p>'''
+        ns_str = nsdecls('w', 'v', 'o', 'r')
+        xml = (
+            f'<w:p {ns_str}>'
+            f'<w:r>'
+            f'<w:pict>'
+            f'<v:shape id="seal_{doc_id}" type="#_x0000_t75" '
+            f'style="position:absolute;left:{left_pt:.2f}pt;top:{top_pt:.2f}pt;width:{width_pt:.2f}pt;height:{height_pt:.2f}pt;z-index:251658240;mso-position-horizontal-relative:page;mso-position-vertical-relative:page" '
+            f'filled="f" stroked="f">'
+            f'<v:imagedata r:id="{rId}" o:title="Seal"/>'
+            f'</v:shape>'
+            f'</w:pict>'
+            f'</w:r>'
+            f'</w:p>'
+        )
         return xml
 
     def generate_docx(self, translated_data: dict) -> dict:
@@ -178,8 +188,8 @@ class DocxService:
         footer_top_in = page_h_in - 1.8
         max_content_bottom_in = footer_top_in - 0.25
 
-        left_column_max_x = page_w_in * 0.40   # 左侧限制屏障
-        right_column_min_x = page_w_in * 0.48  # 右侧起点屏障
+        left_column_max_x = page_w_in * 0.40
+        right_column_min_x = page_w_in * 0.48
 
         # 1. 绘制 Photo 照片框
         photo_xml = self._create_textbox_vml(
@@ -214,20 +224,16 @@ class DocxService:
             en_lower = en_text.lower()
 
             is_title = any(k in en_lower for k in ["graduation diploma", "graduation certificate", "certificate of graduation"])
-            
-            # 💡 强行锁定右半页的元素关键字（校长、签名、发证日期等）
             is_right_page_keyword = any(k in en_lower for k in ["principal", "headmaster", "signature", "graduation", "diploma", "having completed", "granted graduation"])
             is_right_half = (rel_left >= 0.42) or is_right_page_keyword
 
             if is_right_half:
-                # --- 右半页算法 ---
-                font_size_pt = 16.0 if is_title else 14.0  # 右半页：四号 (14pt)
+                font_size_pt = 16.0 if is_title else 14.0  # 右半页：Times New Roman 四号 (14pt)
                 is_bold = is_title
 
                 left_in = max(rel_left * page_w_in, right_column_min_x)
                 top_in = min_top_in + (rel_top * usable_height_in * 0.85)
 
-                # 💡【解决图三图四】：如果是签名或印章说明等短块，拓宽宽度保证 100% 1行显示！
                 is_short_label = any(k in en_lower for k in ["principal", "signature", "seal of", "date", "july", "june"])
                 if is_short_label:
                     needed_w_in = char_count * (font_size_pt * 0.0095) + 0.5
@@ -240,20 +246,17 @@ class DocxService:
                     width_in = max(1.5, width_in)
 
             else:
-                # --- 左半页算法 ---
-                font_size_pt = 11.5  # 左半页：小四 (11.5-12pt)
+                font_size_pt = 11.5  # 左半页：Times New Roman 小四 (11.5-12pt)
                 is_bold = False
 
                 left_in = rel_left * page_w_in
                 top_in = min_top_in + (rel_top * usable_height_in * 0.85)
 
-                # 💡【解决图三图四】：左侧单行印章说明/学籍号加宽，且严格不越过右边界
                 max_allowed_w = max(1.5, left_column_max_x - left_in)
                 needed_w_in = char_count * (font_size_pt * 0.0085) + 0.3
                 width_in = min(needed_w_in, max_allowed_w)
                 width_in = max(1.2, width_in)
 
-            # 单行与多行高度计算
             chars_per_line = max(10, int((width_in * 72) / (font_size_pt * 0.55)))
             estimated_lines = math.ceil(char_count / chars_per_line)
             single_line_h_in = (font_size_pt / 72.0) * 1.45
