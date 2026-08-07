@@ -13,6 +13,9 @@ from docx.enum.section import WD_ORIENT
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls, nsmap
 
+# 💡 补齐配置模块导入
+import config
+
 nsmap['v'] = 'urn:schemas-microsoft-com:vml'
 nsmap['o'] = 'urn:schemas-microsoft-com:office:office'
 
