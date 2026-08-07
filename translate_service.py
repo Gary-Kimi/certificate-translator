@@ -39,32 +39,29 @@ class TranslationService:
             })
 
         prompt = f"""你是一名官方公证翻译与版面还原专家。
-下面是从一张毕业证书图片中识别到的原始文本块 JSON 数组：
+下面是从一张证书图片中识别到的原始文本块 JSON 数组：
 
 {json.dumps(input_blocks, ensure_ascii=False, indent=2)}
 
-【核心拼接规则（非常重要！）】：
-1. 右半页正文缝合（解决重叠的关键）：
-   - 原文中关于学生姓名、籍贯、性别、年龄、入学毕业时间、成绩合格、准予毕业的所有分散文本片段（如："学生", "曹亦凡", "系", "江苏省", "靖江市人", "性别男", "现年17周岁", "于2023年9月至2026年6月在本校高中修业三年期满", "成绩合格", "准予毕业"），必须【100% 缝合并翻译为【唯一的一段完整英文长句】】！
-   - 示例翻译："Student Cao Yifan, native of Jingjiang City, Jiangsu Province, male, aged 17, having completed the three-year senior high school program at this school from September 2023 to June 2026, with satisfactory academic performance, is hereby awarded graduation."
-   - 绝对严禁将右半页正文分成多个独立的 JSON 文本块！
+【通用公证翻译与缝合规范】：
+1. 右半页正文100%完整缝合（核心）：
+   - 将关于学生姓名、性别、出生日期/年龄、入学毕业时间、修业期满、成绩合格、准予毕业的所有分散字段，【100% 合并并翻译为唯一一条完整的英文公证长句】！
+   - 示例："Student Niu Wen, female, born on October 12, 2006, aged 18, having completed the three-year senior high school program at this school from September 2022 to June 2025, with satisfactory academic performance, is hereby awarded graduation."
+   - 严禁将正文拆分成多条碎片文字！
 
-2. 右半页其他结构：
-   - 标题："Graduation Certificate" 或 "Jiangsu Province High School Graduation Certificate"
-   - 校长签名："Principal: Wu Jun (Signature)"
-   - 日期："July 10, 2026"
+2. 签名与印章提取：
+   - 校长签名：如果能识别出姓名，输出 "Principal: [Name] (Signature)"；若只有签名字样无清晰姓名，输出 "Principal: (Signature)"。
+   - 钢印/印章标注：翻译为 "(Official Seal)"、"(School embossed seal)" 或 "(Official Seal of Education Administrative Department)"。
 
-3. 左半页标注结构：
-   - 教育局验印："(Official Seal of Education Administrative Department)"
-   - 学籍号："Student ID: G12826100520230264"
-   - 毕证字号："Certificate No.: 32128200520260276"
-   - 加盖学校行政章："(Official Seal of Jiangsu Province Jingjiang Senior High School)"
+3. 位置标识 left：
+   - 左半页元素（学籍号、毕证字号、发证号、钢印说明等），bbox_rel.left 设为 0.08。
+   - 右半页元素（标题、正文段落、校长签名、发证日期），bbox_rel.left 设为 0.52。
 
 【输出格式要求】：
-必须仅返回一个标准的 JSON 数组，严禁包含任何 Markdown 代码块标记（如 ```json）。格式如下：
+必须仅返回一个标准的 JSON 数组，严禁包含任何 Markdown 标记（如 ```json）。格式如下：
 [
   {{
-    "en_text": "Translated content here",
+    "en_text": "Translated content",
     "bbox_rel": {{
       "left": 0.5200,
       "top": 0.2500,
