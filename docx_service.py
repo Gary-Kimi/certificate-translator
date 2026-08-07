@@ -49,8 +49,23 @@ class DocxService:
             doc.element.body.append(element)
 
     def _parse_inline_runs_xml(self, line_text: str, font_size_pt: float, base_is_bold: bool = False) -> str:
+        """
+        💡 核心渲染防爆引擎：
+        1. 剥离除了 <b> 和 </b> 以外的所有杂质 HTML 标签；
+        2. 解析 <b>...</b> 行内加粗；
+        3. 对所有文字内容进行 XML 实体安全转义，防止破坏 Word XML 语法结构。
+        """
+        if not line_text:
+            return ""
+
+        # 1. 基础不安全字符清理
         clean_line = self._clean_text(line_text)
-        parts = re.split(r'(<b>.*?</b>)', clean_line, flags=re.IGNORECASE)
+        
+        # 2. 精准剔除除了 <b> 和 </b> 之外的所有其它 HTML 标签 (如 <p>, </p>, <br>, <i>等)
+        clean_line = re.sub(r'<(?!/?b\b)[^>]*>', '', clean_line, flags=re.IGNORECASE)
+
+        # 3. 按 <b>...</b> 切分段落
+        parts = re.split(r'(<b>.*?</b>)', clean_line, flags=re.IGNORECASE | re.DOTALL)
         sz_val = int(font_size_pt * 2)
         runs_xml = []
 
@@ -61,10 +76,12 @@ class DocxService:
             is_bold = base_is_bold
             txt_content = part
 
+            # 判断是否为被 <b>...</b> 包裹的加粗片段
             if part.lower().startswith("<b>") and part.lower().endswith("</b>"):
                 is_bold = True
                 txt_content = part[3:-4]
 
+            # 4. 全局 XML 安全转义 (保证 & < > 绝对不会破坏 Word XML 标签)
             safe_txt = html.escape(txt_content)
             bold_xml = '<w:b/>' if is_bold else ''
 
@@ -123,7 +140,8 @@ class DocxService:
         txbx_content = "".join(p_runs)
         doc_id = self._get_next_id()
 
-        ns_str = nsdecls('w', 'v')
+        # 补全完整命名空间，确保 VML 解析 100% 合规
+        ns_str = nsdecls('w', 'v', 'o', 'r')
         xml = (
             f'<w:p {ns_str}>'
             f'<w:r>'
@@ -133,6 +151,7 @@ class DocxService:
             f'filled="f" stroked="{stroked}" strokecolor="#B0B0B0">'
             f'<v:textbox inset="0pt,0pt,0pt,0pt">'
             f'<w:txbxContent>{txbx_content}</w:txbxContent>'
+            f'</v:textbox>'
             f'</v:shape>'
             f'</w:pict>'
             f'</w:r>'
@@ -299,9 +318,9 @@ class DocxService:
             left_y += h_in + 0.12
             count += 1
 
-        # ==================== B. 右半区美化绘制（与图一 1:1 坐标对齐） ====================
+        # ==================== B. 右半区美化绘制 ====================
         right_area_x = 4.8
-        right_area_w = 6.2  # 💡精准宽度：保持与图一右侧宽度与行距一致
+        right_area_w = 6.2
 
         for b in right_blocks:
             text = b["en_text"]
