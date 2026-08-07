@@ -214,7 +214,6 @@ class DocxService:
 
             bbox_rel = block.get("bbox_rel", {})
             rel_left = bbox_rel.get("left", 0.0)
-            rel_top = bbox_rel.get("top", 0.0)
 
             char_count = len(en_text)
             en_lower = en_text.lower()
@@ -228,14 +227,14 @@ class DocxService:
             if is_right_half:
                 # ================= 右半页 =================
                 if is_title:
-                    font_size_pt = 16.0
+                    # 💡【标题 1 行保护】：起点放宽至 4.8 英寸，赋予 6.6 英寸超大宽度，保证 1 行整齐放满
+                    font_size_pt = 15.0
                     is_bold = True
-                    left_in = max(rel_left * page_w_in, 5.2)
+                    left_in = 4.8
                     top_in = 0.8
-                    width_in = page_w_in - left_in - 0.5
-                    height_in = 0.5
+                    width_in = page_w_in - left_in - 0.3
+                    height_in = 0.45
                 elif "principal" in en_lower:
-                    # 校长签名：贴靠右侧
                     font_size_pt = 14.0
                     is_bold = False
                     left_in = 5.2
@@ -244,7 +243,6 @@ class DocxService:
                     height_in = 0.4
                     align_right = True
                 elif any(m in en_lower for m in ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]) and len(en_text) < 25:
-                    # 发证日期：贴靠右侧
                     font_size_pt = 14.0
                     is_bold = False
                     left_in = 5.2
@@ -253,11 +251,10 @@ class DocxService:
                     height_in = 0.4
                     align_right = True
                 else:
-                    # 💡 核心主体段落：起点调整至 top_in = 2.2 英寸，自然向下移至签名上方适宜距离
                     font_size_pt = 14.0
                     is_bold = False
                     left_in = max(rel_left * page_w_in, 5.2)
-                    top_in = 2.2  # 平移下移
+                    top_in = 2.2
                     width_in = page_w_in - left_in - 0.5
                     
                     chars_per_line = max(10, int((width_in * 72) / (font_size_pt * 0.55)))
