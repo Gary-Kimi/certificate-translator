@@ -43,7 +43,8 @@ class TranslationService:
 
             max_size = 1280
             if max(img.width, img.height) > max_size:
-                img.thumbnail((max_size, max_size), Image Resampling.LANCZOS)
+                # 💡 修正了少点的语法错误：Image.Resampling.LANCZOS
+                img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
 
             buffer = io.BytesIO()
             img.save(buffer, format="JPEG", quality=85)
