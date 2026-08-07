@@ -65,36 +65,33 @@ class TranslationService:
 
         input_json_str = json.dumps(input_blocks, ensure_ascii=False, indent=2)
 
-        # 💡 通用元规则 Prompt：适用于全国所有高中/中专/大学毕业证书
         prompt_text = f"""你是一名精通中国官方毕业证书/学位证书公证翻译的视觉大模型专家。
 附件是一张毕业证书的原图，下方是从该图片中初步提取到的文本块 JSON 数组：
 
 {input_json_str}
 
-【通用实体提取与视觉消歧元规则（适合所有中国证书）】：
+【右半页 4 个标准独立文本块输出规范（必须严格遵循！）】：
 
-请仔细观察图片，按照以下空间分工原则提取实体，严禁跨区域乱混：
+你必须将右半页分割为且仅分割为以下 4 个独立的文本块返回：
 
-1. 【学校名称 (School Name)】：
-   - 提取位置：观察红章中的环形文字、证书标题、或正文中“在本校高中修业”前面的机构全称。
-   - 消歧规则：中国学校常包含地名或名人姓名（如“刘国钧中学”、“陶行知中学”、“第一中学”等）。【绝对禁止】将校名中的人名误识别为“校长姓名”！
-   - 示例：若校名为“靖江市刘国钧中学” -> `Jingjiang Liu Guojun High School`；若为“南京市高级中学” -> `Nanjing Senior High School`。
+1. 【证书标题块 (Title)】（必须包含！）：
+   - 必须固定独立作为一个文本块返回，翻译为 `"Graduation Diploma"`（对应中文“毕业证书”或“江苏省高中毕业证书”）。
 
-2. 【校长签名 (Principal Signature)】：
-   - 提取位置：【仅仅观察】“校长（签印）”或“校长：”这一行正右侧/正下方的【蓝色/黑色手写体】或【红色方形个人名章】！
-   - 识别逻辑：仔细认读该位置的笔迹。若能辨认出真实汉字（如“吴俊”），翻译为 `Principal: <b>Wu Jun</b> (Signature seal)`；若为极其抽象难认的潦草连笔，【绝对禁止从学校公章里猜测】，请安全降级写为 `Principal: (Signature seal)`。
+2. 【毕业正文长句块 (Main Body)】：
+   - 必须将关于学生姓名、籍贯、性别、年龄/出生年月、入学/毕业时间、修业年限、成绩合格、准予毕业的所有文字，【100% 完整合成为唯一一条标准英文公证长句】！
+   - 必须使用 `<b>...</b>` 标签加粗关键实体。
+   - 抽象示例："The student of <b>Cao Yifan</b>, native of <b>Jingjiang</b> City, <b>Jiangsu</b> province, <b>male</b>, aged <b>17</b>, having completed the three-year senior high school program at this school from <b>September 2023</b> to <b>June 2026</b>, with satisfactory academic performance, is hereby awarded graduation."
 
-3. 【学生信息与正文 (Student Info & Main Text)】：
-   - 从正文精准提取：学生姓名、籍贯城市/省份、性别(男/女)、年龄或出生年月、入学时间至毕业时间。
-   - 必须100%缝合并翻译为唯一一条标准公证长句，并用 `<b>...</b>` 标签包裹所有关键实体词汇：
-     抽象格式："The student of <b>[学生姓名拼音]</b>, native of <b>[市/县英文]</b> City, <b>[省英文]</b> province, <b>[male/female]</b>, born on <b>[出生年月/年龄]</b>, has studied in our school here from <b>[入学年月]</b> to <b>[毕业年月]</b> and completed senior school courses (three years) with satisfactory results and is hereby granted graduation."
+3. 【校长签名块 (Principal)】：
+   - 【极其重要】：观察“校长签印”右侧的字迹（如草书“吴俊”），必须独立作为单独一块返回，格式为 `Principal: <b>Wu Jun</b> (Signature seal)` 或 `Principal: (Signature seal)`。绝不能与正文段落写在同一个块里！
 
-4. 【印章说明与左半页 (Seals & Left Column)】：
-   - 学校公章：`(Official seal of [学校英文全称])`
-   - 教育局验印章：`(Seal of the education authority for verification)` 或 `(Official seal of [XX] Municipal Education Bureau)`
-   - 左侧字段：学籍号 (`Student Registration Number: [编号]`)、毕证字号 (`Graduation Certificate Number: [编号]`)、钢印标注 (`(School embossed seal)`)、补办无效说明 (`Not Reissued if Lost`)。
+4. 【发证日期块 (Date)】：
+   - 从右下角提取中文日期（如“二〇二六年七月十日”），格式为 `Date of Issue: <b>July 10, 2026</b>`。
 
-【版面 left 坐标设定】：
+【通用消歧规则】：
+- 中国学校名称常包含名人姓名（如“刘国钧中学”）。【绝对禁止】将学校名称中的字词当作校长名字！校长名字只从“校长签印”这四个字正右方的文字提取！
+
+【版面 left 设定】：
 - 左半页元素：bbox_rel.left 设为 0.08。
 - 右半页元素（标题、正文长句、校长签名、发证日期）：bbox_rel.left 设为 0.52。
 
@@ -102,11 +99,15 @@ class TranslationService:
 直接返回标准的 JSON 数组，格式形如：
 [
   {{
+    "en_text": "Graduation Diploma",
+    "bbox_rel": {{"left": 0.52, "top": 0.1}}
+  }},
+  {{
     "en_text": "The student of <b>Cao Yifan</b>...",
     "bbox_rel": {{"left": 0.52, "top": 0.2}}
   }}
 ]
-严禁使用 Markdown 代码块，确保可以直接被 json.loads 解析！
+严禁使用 Markdown 代码块！
 """
 
         try:
@@ -123,7 +124,7 @@ class TranslationService:
                 })
 
             messages = [
-                {"role": "system", "content": "你是一个严格遵守空间区域隔离与实体消歧元规则的专业公证翻译助手。"},
+                {"role": "system", "content": "你是一个严格遵循 4 块结构化分割与实体消歧规则的专业公证翻译助手。"},
                 {"role": "user", "content": content_list}
             ]
 
