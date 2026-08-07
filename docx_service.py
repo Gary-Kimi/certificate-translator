@@ -33,7 +33,6 @@ class DocxService:
         return None
 
     def _is_chinese(self, text: str) -> bool:
-        """检查文本是否包含过多的原始中文字符（过滤可能遗留的原始 OCR 碎片）"""
         chinese_chars = re.findall(r'[\u4e00-\u9fa5]', text)
         return len(chinese_chars) > 2
 
@@ -102,7 +101,6 @@ class DocxService:
         left_blocks = []
         raw_right_blocks = []
 
-        # 💡【通用纯物理分栏逻辑】：按绝对坐标 X (0.45) 划归左右半页，不做任何特例硬编码
         for block in blocks:
             if not isinstance(block, dict):
                 continue
@@ -131,7 +129,7 @@ class DocxService:
 
         left_blocks.sort(key=lambda b: b.get("bbox_rel", {}).get("top", 0.0))
 
-        # 💡【通用语义流分类】：将右半页元素归类为通用语义结构
+        # 💡【主句优先隔离引擎】：无条件优先隔离长句正文，彻底杜绝正文被误判为标题！
         title_block = None
         main_block = None
         principal_block = None
@@ -142,24 +140,27 @@ class DocxService:
             txt = b["en_text"]
             t_low = txt.lower()
 
+            # 特征 1：校长签名
             if "principal" in t_low:
                 principal_block = b
+            # 特征 2：发证日期
             elif "date of issue" in t_low or "date:" in t_low or (len(txt) < 40 and any(m in t_low for m in ["july", "june", "january", "february", "march", "april", "may", "august", "september", "october", "november", "december"])):
                 date_block = b
-            elif any(k in t_low for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation", "diploma", "certificate title"]) and "seal" not in t_low and "stamp" not in t_low:
-                title_block = b
-            elif any(k in t_low for k in ["this is to certify", "student of", "the student", "having completed", "hereby granted", "hereby awarded", "completed senior", "studied at", "courses with", "satisfactory results", "passed all"]) or len(txt) > 50:
+            # 特征 3：绝对正文（只要字数 > 70，或者包含正文动词句式，绝对归为正文！）
+            elif len(txt) > 70 or any(k in t_low for k in ["this is to certify", "the student", "studied at", "completed three", "completed 3", "hereby granted", "hereby awarded", "passed all", "satisfactory results", "having completed"]):
                 main_block = b
+            # 特征 4：真正的标题块（字数短，包含标题关键词，且无印章字眼）
+            elif len(txt) <= 70 and any(k in t_low for k in ["graduation diploma", "graduation certificate", "certificate of graduation", "high school graduation", "diploma", "certificate title", "certificate"]) and "seal" not in t_low and "stamp" not in t_low:
+                title_block = b
             else:
                 other_right_blocks.append(b)
 
-        # 组合右页完整语义排版流
+        # 组合右页流
         right_blocks_ordered = []
         if title_block:
             right_blocks_ordered.append((title_block, "title"))
         if main_block:
             right_blocks_ordered.append((main_block, "main"))
-        # 右半页上的印章说明跟在正文下方
         for ob in other_right_blocks:
             right_blocks_ordered.append((ob, "seal_other"))
         if principal_block:
@@ -208,7 +209,7 @@ class DocxService:
 
             self._add_formatted_runs(p, text, default_font_size=font_sz)
 
-        # ==================== B. 右半区通用语义流渲染 ====================
+        # ==================== B. 右半区精准渲染 ====================
         p_right_first = cell_right.paragraphs[0]
         first_right = True
 
@@ -244,7 +245,6 @@ class DocxService:
                 p.paragraph_format.space_after = Pt(12)
                 self._add_formatted_runs(p, text, default_font_size=12.5, default_bold=False)
             else:
-                # 右页上的公章等其他元素居中或靠左小字排版
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER if "seal" in text.lower() else WD_ALIGN_PARAGRAPH.LEFT
                 p.paragraph_format.space_before = Pt(4)
                 p.paragraph_format.space_after = Pt(4)
