@@ -1,98 +1,126 @@
 import os
-import sys
+import tempfile
 from pathlib import Path
-
-# 1. 设置环境变量，防止云端 Linux 环境报错
-os.environ["FLAGS_use_mkldnn"] = "0"
-os.environ["FLAGS_enable_pir_api"] = "0"
-os.environ["FLAGS_enable_pir_in_executor"] = "0"
-os.environ["CPU_NUM"] = "1"
-
 import streamlit as st
 
-# 2. 读取 Streamlit 云端的 Secrets 密钥（若存在），并注入环境变量
-if "LLM_API_KEY" in st.secrets:
-    os.environ["LLM_API_KEY"] = st.secrets["LLM_API_KEY"]
-
-# 3. 导入业务服务
+# 导入自定义服务模块
+import config
 from ocr_service import ocr_service
 from translate_service import translate_service
 from docx_service import docx_service
-import config
 
-# 设置网页标题与图标
+# 1. 页面基本配置
 st.set_page_config(
-    page_title="毕业证/证件自动化翻译与排版系统",
-    page_icon="📄",
+    page_title="毕业证书智能公证翻译系统",
+    page_icon="📜",
     layout="wide"
 )
 
-st.title("📄 智能证件翻译与 1:1 版面还原系统")
-st.caption("技术栈：PaddleOCR 相对坐标抽取 + DeepSeek-V3 智能翻译 + Word OpenXML 绝对定位排版")
+# 2. 主界面标题与说明
+st.title("📜 毕业证书智能公证翻译与 Word 排版系统")
+st.markdown("""
+本系统集成了 **OCR 版面提取 + 通义千问视觉大模型 (Qwen-VL-Max) + Word VML 矢量排版引擎**：
+* 👁️ **视觉识破**：结合视觉大模型，能准确提取红色环形印章文字（如校章、教育局章）与校长手写草书签名；
+* 📐 **防重叠排版**：自动分栏隔离，精准匹配 Times New Roman 四号/小四字体，彻底消除元素撞车；
+* 📄 **标准公证**：1 秒生成 100% 符合国际公证规范的 `.docx` 格式 Word 译本。
+""")
 
-# 侧边栏：服务状态检查
+st.divider()
+
+# 3. 侧边栏配置与 API Key 检查
 with st.sidebar:
-    st.header("⚙️ 系统配置状态")
-    current_key = os.getenv("LLM_API_KEY", config.LLM_API_KEY)
-    if current_key and current_key.startswith("sk-"):
-        st.success("DeepSeek API Key 已就绪")
+    st.header("⚙️ 系统状态与配置")
+    
+    # 检查通义千问 API Key 状态
+    qwen_key = os.getenv("QWEN_API_KEY", getattr(config, "QWEN_API_KEY", ""))
+    try:
+        if "QWEN_API_KEY" in st.secrets:
+            qwen_key = st.secrets["QWEN_API_KEY"]
+        elif "LLM_API_KEY" in st.secrets and st.secrets["LLM_API_KEY"].startswith("sk-"):
+            qwen_key = st.secrets["LLM_API_KEY"]
+    except Exception:
+        pass
+        
+    if qwen_key and qwen_key.startswith("sk-"):
+        st.success("✅ 通义千问视觉 API Key 正常")
     else:
-        st.warning("未检测到有效 API Key，请在云端配置 Secrets")
+        st.error("⚠️ 未检测到有效的 QWEN_API_KEY！")
+        st.info("请在 Streamlit Cloud Secrets 中配置 `QWEN_API_KEY`。")
 
-# 主界面：上传区
-uploaded_file = st.file_uploader("上传毕业证 / 证件照片（支持 JPG、PNG 格式）", type=["jpg", "jpeg", "png"])
+    st.markdown("---")
+    st.markdown("### 💡 使用指南")
+    st.markdown("""
+    1. 上传毕业证书/学位证书图片（支持 JPG、PNG）；
+    2. 点击 **“开始智能翻译与生成 Word”**；
+    3. 系统处理完成后，点击蓝色按钮下载 Word 文档。
+    """)
+
+# 4. 主区域：文件上传与双栏交互
+uploaded_file = st.file_uploader("请选择要翻译的证书图片", type=["png", "jpg", "jpeg"])
 
 if uploaded_file is not None:
     col1, col2 = st.columns([1, 1])
-
-    # 左侧：图片预览
+    
     with col1:
-        st.subheader("📷 上传证件预览")
-        image_bytes = uploaded_file.read()
-        st.image(image_bytes, use_container_width=True)
-
-    # 右侧：按钮与处理流程
+        st.subheader("📷 原始证书预览")
+        st.image(uploaded_file, use_container_width=True)
+        
     with col2:
-        st.subheader("🚀 一键智能转换")
-        if st.button("开始识别并生成 Word 翻译件", type="primary", use_container_width=True):
+        st.subheader("🚀 翻译与生成")
+        
+        if st.button("✨ 开始智能翻译与生成 Word", type="primary", use_container_width=True):
+            # 将上传的文件临时存盘，以便 OCR 和 Qwen-VL 读取
+            suffix = Path(uploaded_file.name).suffix or ".jpg"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp_file:
+                tmp_file.write(uploaded_file.getvalue())
+                temp_image_path = tmp_file.name
+
             try:
-                # 步骤 A: OCR 文字与坐标抽取
-                with st.spinner("1/3 正在进行 PaddleOCR 文本定位与坐标提取..."):
-                    ocr_result = ocr_service.analyze_image(image_bytes)
-
-                # 步骤 B: 调用 DeepSeek 翻译
-                with st.spinner("2/3 正在调用 DeepSeek 进行公证级英文翻译..."):
-                    translated_result = translate_service.translate_ocr_blocks(ocr_result)
-
-                # 步骤 C: 生成 Word 文档
-                with st.spinner("3/3 正在构建 OpenXML 1:1 坐标排版 Word..."):
-                    doc_info = docx_service.generate_docx(translated_result)
-
-                    # 读取生成的 docx 文件二进制流
-                    file_name = doc_info["filename"]
-                    file_path = docx_service.output_dir / file_name
-                    with open(file_path, "rb") as f:
-                        word_bytes = f.read()
-
-                st.success(f"🎉 转换完成！共定位并填充了 {doc_info['block_count']} 个文本块。")
-
-                # 下载按钮
-                st.download_button(
-                    label="📥 点击下载 Word 翻译文档 (.docx)",
-                    data=word_bytes,
-                    file_name=file_name,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True
-                )
-
-                # 中英文对照列表展示
-                st.subheader("🌐 中英文翻译对照详情")
-                blocks = translated_result.get("blocks", [])
-                table_data = [
-                    {"#": i + 1, "中文原文": b["text"], "DeepSeek 英文翻译": b.get("en_text", "")}
-                    for i, b in enumerate(blocks)
-                ]
-                st.dataframe(table_data, use_container_width=True)
+                # 步骤 1：OCR 提文本块框架
+                with st.spinner("🔍 步骤 1/3: 正在提取文本位置框架..."):
+                    ocr_data = ocr_service.recognize(temp_image_path)
+                
+                # 步骤 2：Qwen-VL-Max 视觉看图识破印章与签名
+                with st.spinner("👁️ 步骤 2/3: 通义千问 (Qwen-VL-Max) 正在识破红章文字与草书签名..."):
+                    translated_data = translate_service.translate_ocr_blocks(
+                        ocr_data, 
+                        image_input=temp_image_path
+                    )
+                
+                # 步骤 3：生成 VML 完美排版的 DOCX
+                with st.spinner("📝 步骤 3/3: 正在生成精准排版的 Word 公证书..."):
+                    result = docx_service.generate_docx(translated_data)
+                
+                st.success("🎉 处理完成！您的 Word 公证翻译文档已就绪。")
+                
+                # 读取生成的 Word 文件提供下载
+                generated_filename = result.get("filename")
+                output_file_path = config.OUTPUT_DIR / generated_filename
+                
+                if output_file_path.exists():
+                    with open(output_file_path, "rb") as f:
+                        file_bytes = f.read()
+                    
+                    st.download_button(
+                        label=f"📥 立即下载翻译文档 ({generated_filename})",
+                        data=file_bytes,
+                        file_name=generated_filename,
+                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        type="primary",
+                        use_container_width=True
+                    )
+                else:
+                    st.error("找不到生成的 Word 文件，请检查输出路径设置。")
 
             except Exception as e:
-                st.error(f"处理失败，错误详情: {str(e)}")
+                st.error(f"❌ 处理失败: {str(e)}")
+            
+            finally:
+                # 任务完成后清理临时图片文件
+                if os.path.exists(temp_image_path):
+                    try:
+                        os.remove(temp_image_path)
+                    except Exception:
+                        pass
+else:
+    st.info("👈 请在上方选择并上传需要翻译的证书图片。")
