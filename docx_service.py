@@ -11,6 +11,7 @@ from docx.oxml import parse_xml
 from docx.oxml.ns import nsmap, nsdecls
 import config
 
+# 注册 VML 和 Office 命名空间
 nsmap['v'] = 'urn:schemas-microsoft-com:vml'
 nsmap['o'] = 'urn:schemas-microsoft-com:office:office'
 
@@ -193,7 +194,7 @@ class DocxService:
 
         footer_top_in = page_h_in - 1.8
 
-        # 1. 照片框
+        # 1. 照片框 (位置: left=1.8, top=0.6, width=1.3)
         photo_xml = self._create_textbox_vml(
             text="Photo",
             left_in=1.8,
@@ -214,7 +215,6 @@ class DocxService:
             if not isinstance(block, dict):
                 continue
 
-            # 💡【多通道字符提取】：智能尝试所有可能的字段 key
             en_text = (block.get("en_text") or block.get("text") or block.get("translation") or "").strip()
             if not en_text:
                 continue
@@ -230,7 +230,6 @@ class DocxService:
             is_right_kw = any(k in en_lower for k in ["principal", "having completed", "granted graduation", "awarded graduation", "date of issue", "june", "july"])
             is_left_kw = any(k in en_lower for k in ["student id", "diploma no", "certificate no", "issuance no", "embossed seal"])
 
-            # 保证提取出来的结构包含标准的 en_text 和 bbox_rel
             normalized_block = {
                 "en_text": en_text,
                 "bbox_rel": bbox_rel
@@ -246,7 +245,7 @@ class DocxService:
 
         count = 0
 
-        # ==================== A. 左栏全量绘制 ====================
+        # ==================== A. 左栏全量绘制（向右平移至 Photo 正下方） ====================
         left_y = 2.4
         for b in left_blocks:
             text = b["en_text"]
@@ -256,7 +255,8 @@ class DocxService:
             lines_cnt = math.ceil(len(text) / 45)
             h_in = max(0.35, lines_cnt * 0.25)
 
-            xml = self._create_textbox_vml(text, 0.35, left_y, 4.2, h_in, font_size_pt=font_sz)
+            # 💡【核心改动】：起点平移至 0.8 英寸，使文本自然对齐位于 Photo 框正下方
+            xml = self._create_textbox_vml(text, 0.8, left_y, 3.8, h_in, font_size_pt=font_sz)
             self._append_to_body(doc, xml)
             left_y += h_in + 0.15
             count += 1
