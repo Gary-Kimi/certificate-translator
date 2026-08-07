@@ -70,28 +70,32 @@ class TranslationService:
 
 {input_json_str}
 
-【右半页 4 个标准独立文本块输出规范（必须严格遵循！）】：
+【右半页 4 个标准独立文本块输出规范（必须严格根据原图文字据实提取翻译！）】：
 
 你必须将右半页分割为且仅分割为以下 4 个独立的文本块返回：
 
-1. 【证书标题块 (Title)】（必须包含！）：
-   - 必须固定独立作为一个文本块返回，翻译为 `"Graduation Diploma"`（对应中文“毕业证书”或“江苏省高中毕业证书”）。
+1. 【证书标题块 (Title)】（必须根据图片顶部标题文字动态据实翻译！）：
+   - 请仔细认读图片右半页顶部的标题中文（例如“江苏省高中毕业证书”、“普通高中毕业证书”、“毕业证书”等）：
+     * 若图片文字为“江苏省高中毕业证书” -> 必须据实翻译为 `"Senior High School Graduation Certificate of Jiangsu Province"`；
+     * 若图片文字为“普通高中毕业证书” -> 必须据实翻译为 `"General Senior High School Graduation Certificate"`；
+     * 若图片文字为“毕业证书” -> 必须据实翻译为 `"Graduation Certificate"` 或 `"Graduation Diploma"`；
+   - 严禁脑补套用固定标题，必须与图片顶部的实际文字严格匹配！
 
 2. 【毕业正文长句块 (Main Body)】：
    - 必须将关于学生姓名、籍贯、性别、年龄/出生年月、入学/毕业时间、修业年限、成绩合格、准予毕业的所有文字，【100% 完整合成为唯一一条标准英文公证长句】！
-   - 必须使用 `<b>...</b>` 标签加粗关键实体。
-   - 抽象示例："The student of <b>Cao Yifan</b>, native of <b>Jingjiang</b> City, <b>Jiangsu</b> province, <b>male</b>, aged <b>17</b>, having completed the three-year senior high school program at this school from <b>September 2023</b> to <b>June 2026</b>, with satisfactory academic performance, is hereby awarded graduation."
+   - 必须使用 `<b>...</b>` 标签加粗关键实体（如姓名、籍贯城市、省份、性别、时间等）。
+   - 示例："The student of <b>Cao Yifan</b>, native of <b>Jingjiang</b> City, <b>Jiangsu</b> province, <b>male</b>, aged <b>17</b>, having completed the three-year senior high school program at this school from <b>September 2023</b> to <b>June 2026</b>, with satisfactory academic performance, is hereby awarded graduation."
 
 3. 【校长签名块 (Principal)】：
-   - 【极其重要】：观察“校长签印”右侧的字迹（如草书“吴俊”），必须独立作为单独一块返回，格式为 `Principal: <b>Wu Jun</b> (Signature seal)` 或 `Principal: (Signature seal)`。绝不能与正文段落写在同一个块里！
+   - 【极其重要】：观察“校长签印”右侧的字迹（如草书“吴俊”），必须独立作为单独一块返回，格式为 `Principal: <b>Wu Jun</b> (Signature seal)` 或 `Principal: (Signature seal)`。绝不能与正文段落合并！
 
 4. 【发证日期块 (Date)】：
    - 从右下角提取中文日期（如“二〇二六年七月十日”），格式为 `Date of Issue: <b>July 10, 2026</b>`。
 
 【通用消歧规则】：
-- 中国学校名称常包含名人姓名（如“刘国钧中学”）。【绝对禁止】将学校名称中的字词当作校长名字！校长名字只从“校长签印”这四个字正右方的文字提取！
+- 中国学校名称常包含名人姓名（如“刘国钧中学”）。【绝对禁止】将学校名称中的字词当作校长名字！校长名字只从“校长签印”正右方的文字提取！
 
-【版面 left 设定】：
+【版面 left 坐标设定】：
 - 左半页元素：bbox_rel.left 设为 0.08。
 - 右半页元素（标题、正文长句、校长签名、发证日期）：bbox_rel.left 设为 0.52。
 
@@ -99,7 +103,7 @@ class TranslationService:
 直接返回标准的 JSON 数组，格式形如：
 [
   {{
-    "en_text": "Graduation Diploma",
+    "en_text": "Senior High School Graduation Certificate of Jiangsu Province",
     "bbox_rel": {{"left": 0.52, "top": 0.1}}
   }},
   {{
@@ -124,7 +128,7 @@ class TranslationService:
                 })
 
             messages = [
-                {"role": "system", "content": "你是一个严格遵循 4 块结构化分割与实体消歧规则的专业公证翻译助手。"},
+                {"role": "system", "content": "你是一个严格遵循据实标题识别与 4 块结构化分割规则的专业公证翻译助手。"},
                 {"role": "user", "content": content_list}
             ]
 
