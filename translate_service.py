@@ -43,23 +43,25 @@ class TranslationService:
 
 {json.dumps(input_blocks, ensure_ascii=False, indent=2)}
 
-【核心任务与公证规范】：
-1. 语义拼接合框：请根据中文语境，将属于同一句话的碎块【合并为一条完整语句】并翻译为通顺、标准的公证英文。
-2. 手写签名识别处理：对于校长/负责人签名（如草书“吴俊”），请推断或标注为标准公证格式，例如："Principal: Wu Jun (Signature)" 或 "(Signature)"。
-3. 钢印与红色公章处理：对于圆章/行政章/教育局章（即使 OCR 提取文字不全），请根据上下文补全并规范翻译，例如：
-   - 校章："(Official Seal of Jiangsu Province Jingjiang Senior High School)"
-   - 教育局章："(Official Seal of Education Administrative Department)"
-4. 动态合并坐标外框 (bbox_rel)：计算合并后的联合包围框。
+【核心任务与位置硬性规则】：
+1. 语义拼接合框：请根据中文语境，将属于同一句话的碎块合并并翻译为通顺、标准的公证英文。
+2. 位置严格划分（非常重要）：
+   - 【右半页元素】：证书标题("Graduation Diploma")、正文段落、校长签印/签名("Principal: XXX (Signature)")、发证日期("July 10, 2026")，其坐标 bbox_rel.left 必须 >= 0.50！
+   - 【左半页元素】：照片框、学籍号("Student ID")、毕证字号("Certificate No")、(教育主管部门验印专用章)、(加盖学校行政章)，其坐标 bbox_rel.left 必须 <= 0.35！
+3. 印章与签名规范翻译：
+   - 校长签名：“校长签印 吴俊” -> "Principal: Wu Jun (Signature)"
+   - 圆章/行政章：“(加盖学校行政章)” -> "(Official Seal of Jiangsu Province Jingjiang Senior High School)"
+   - 教育局章：“(教育主管部门验印专用章)” -> "(Official Seal of Education Administrative Department)"
 
 【输出格式要求】：
 必须仅返回一个标准的 JSON 数组，严禁包含任何 Markdown 标记。格式如下：
 [
   {{
-    "en_text": "Translated complete text here",
+    "en_text": "Translated text here",
     "bbox_rel": {{
-      "left": 0.1234,
-      "top": 0.5678,
-      "width": 0.7890,
+      "left": 0.5500,
+      "top": 0.6500,
+      "width": 0.3500,
       "height": 0.0500
     }}
   }}
