@@ -12,20 +12,18 @@ class DocxService:
     def __init__(self):
         self.output_dir = config.OUTPUT_DIR
 
-    def _create_textbox_xml(self, text: str, left_in: float, top_in: float, width_in: float, height_in: float, font_size_pt: int = 10) -> str:
+    def _create_textbox_xml(self, text: str, left_in: float, top_in: float, width_in: float, height_in: float, font_size_pt: int = 9) -> str:
         """
-        通过 OpenXML (DrawingML) 构建 Word 浮动透明文本框
+        通过 OpenXML 构建 Word 绝对定位透明文本框
         """
-        # 单位换算：1 英吋 = 914400 EMUs
         left_emu = int(left_in * 914400)
         top_emu = int(top_in * 914400)
         width_emu = int(width_in * 914400)
         height_emu = int(height_in * 914400)
 
-        # 对文本进行 XML 转义，防止特殊字符（如 &、<、>）损坏 Word 文件
         safe_text = html.escape(text)
 
-        # 手动将所有命名空间显式写入根节点，彻底避免 KeyError: 'wps' 报错
+        # 核心优化：bodyPr 的 lIns/tIns/rIns/bIns 全部设为 0，清除内边距挤压
         xml = f'''
         <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
              xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
@@ -67,7 +65,7 @@ class DocxService:
                         <w:txbxContent>
                           <w:p>
                             <w:pPr>
-                              <w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>
+                              <w:spacing w:before="0" w:after="0" w:line="200" w:lineRule="auto"/>
                             </w:pPr>
                             <w:r>
                               <w:rPr>
@@ -79,7 +77,8 @@ class DocxService:
                           </w:p>
                         </w:txbxContent>
                       </wps:txbx>
-                      <wps:bodyPr lIns="18000" tIns="9000" rIns="18000" bIns="9000" anchor="t"/>
+                      <!-- 将四周内边距全部设为 0 -->
+                      <wps:bodyPr lIns="0" tIns="0" rIns="0" bIns="0" anchor="t"/>
                     </wps:wsp>
                   </a:graphicData>
                 </a:graphic>
@@ -91,9 +90,6 @@ class DocxService:
         return xml
 
     def generate_docx(self, translated_data: dict) -> dict:
-        """
-        根据翻译后的 JSON 数据生成 Word 文档
-        """
         image_size = translated_data.get("image_size", {})
         blocks = translated_data.get("blocks", [])
 
@@ -103,26 +99,23 @@ class DocxService:
         doc = Document()
         section = doc.sections[0]
 
-        # 1. 自动决定页面方向与尺寸（匹配标准 A4）
         is_landscape = orig_w > orig_h
         if is_landscape:
             section.orientation = WD_ORIENT.LANDSCAPE
-            section.page_width = Inches(11.69)   # A4 横向宽度
-            section.page_height = Inches(8.27)   # A4 横向高度
+            section.page_width = Inches(11.69)
+            section.page_height = Inches(8.27)
             page_w_in, page_h_in = 11.69, 8.27
         else:
             section.orientation = WD_ORIENT.PORTRAIT
-            section.page_width = Inches(8.27)    # A4 纵向宽度
-            section.page_height = Inches(11.69)  # A4 纵向高度
+            section.page_width = Inches(8.27)
+            section.page_height = Inches(11.69)
             page_w_in, page_h_in = 8.27, 11.69
 
-        # 页边距设为 0，确保绝对定位与全屏画布吻合
         section.top_margin = Inches(0)
         section.bottom_margin = Inches(0)
         section.left_margin = Inches(0)
         section.right_margin = Inches(0)
 
-        # 2. 遍历每个文本块进行排版放置
         count = 0
         for block in blocks:
             en_text = block.get("en_text", "").strip()
@@ -135,16 +128,36 @@ class DocxService:
             rel_w = bbox_rel.get("width", 0.1)
             rel_h = bbox_rel.get("height", 0.03)
 
-            # 计算在 Word 页面上的物理英吋位置
             left_in = rel_left * page_w_in
             top_in = rel_top * page_h_in
-            width_in = max(0.8, rel_w * page_w_in)     # 适当拉宽，防止英文字符挤压折行
-            height_in = max(0.25, rel_h * page_h_in)
+            
+            # --- 优化策略 1：根据英文长度估算所需宽度（按 9pt 字号每字符约 0.065 英寸计算） ---
+            char_count = len(en_text)
+            needed_w_in = char_count * 0.065
+            
+            # 取“原始标注框的 1.3 倍”与“英文估计所需宽度”的最大值
+            width_in = max(rel_w * page_w_in * 1.3, needed_w_in)
+            
+            # 限制右边界：确保文本框延伸不会超出页面右边缘
+            max_allowed_w = page_w_in - left_in - 0.2
+            if max_allowed_w > 0.5:
+                width_in = min(width_in, max_allowed_w)
+            
+            width_in = max(0.8, width_in)
 
-            # 字号计算 (8pt ~ 14pt)
-            font_size_pt = max(8, min(14, int(height_in * 72 * 0.65)))
+            # --- 优化策略 2：适当放宽文本框高度 ---
+            height_in = max(0.3, rel_h * page_h_in * 1.25)
 
-            # 构建并插入 OpenXML 节点
+            # --- 优化策略 3：根据文本长度智能自适应调整字号 ---
+            if char_count > 60:
+                font_size_pt = 7.5
+            elif char_count > 40:
+                font_size_pt = 8.5
+            elif char_count > 20:
+                font_size_pt = 9.5
+            else:
+                font_size_pt = 10.5
+
             xml_str = self._create_textbox_xml(
                 text=en_text,
                 left_in=left_in,
@@ -157,13 +170,10 @@ class DocxService:
             doc.element.body.append(element)
             count += 1
 
-        # 3. 导出文件保存
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"translated_certificate_{timestamp}.docx"
         file_path = self.output_dir / filename
         doc.save(str(file_path))
-
-        print(f"📄 Word 翻译文件生成成功！共注入 {count} 个浮动英文文本框，保存路径: {file_path}")
 
         return {
             "filename": filename,
@@ -171,5 +181,4 @@ class DocxService:
             "block_count": count
         }
 
-# 单例实例化
 docx_service = DocxService()
